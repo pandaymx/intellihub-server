@@ -1,4 +1,4 @@
-package dev.ppmb.intellihub.server;
+package dev.ppmb.intellihub.app;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

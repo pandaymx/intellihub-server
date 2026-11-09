@@ -1,0 +1,22 @@
+[versions]
+springBoot = "4.1.2"
+springAi = "2.0.2"
+spotless = "8.11.0"
+
+[libraries]
+springBootDependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "springBoot" }
+springAiBom = { module = "org.springframework.ai:spring-ai-bom", version.ref = "springAi" }
+
+springBootStarter = { module = "org.springframework.boot:spring-boot-starter" }
+springBootStarterWeb = { module = "org.springframework.boot:spring-boot-starter-web" }
+springBootStarterTest = { module = "org.springframework.boot:spring-boot-starter-test" }
+springBootAutoconfigure = { module = "org.springframework.boot:spring-boot-autoconfigure" }
+springBootConfigurationProcessor = { module = "org.springframework.boot:spring-boot-configuration-processor" }
+
+springAiStarterModelOpenai = { module = "org.springframework.ai:spring-ai-starter-model-openai" }
+
+junitPlatformLauncher = { module = "org.junit.platform:junit-platform-launcher" }
+
+[plugins]
+springBoot = { id = "org.springframework.boot", version.ref = "springBoot" }
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
