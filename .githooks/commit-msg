@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+# commit-msg：校验提交说明是否符合 Conventional Commits 规范
+commit_msg_file="$1"
+first_line="$(head -n 1 "$commit_msg_file" | tr -d '\r')"
+
+# 放行 Merge 与 Revert 自动提交
+case "$first_line" in
+    Merge\ *|Revert\ *)
+        exit 0
+        ;;
+esac
+
+pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_./-]+\))?!?: .+'
+
+if ! printf '%s\n' "$first_line" | grep -Eq "$pattern"; then
+    echo "❌ [commit-msg] 提交信息不符合 Conventional Commits 规范！" >&2
+    echo "   当前内容: $first_line" >&2
+    echo "   正确格式: <type>(<scope>): <subject> 或 <type>: <subject>" >&2
+    echo "   允许的 type: feat | fix | docs | style | refactor | perf | test | build | ci | chore | revert" >&2
+    echo "   示例: feat(llm): 支持 DeepSeek 流式对话适配" >&2
+    exit 1
+fi
+
+exit 0

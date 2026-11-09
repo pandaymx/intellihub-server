@@ -1,0 +1,30 @@
+#!/usr/bin/env sh
+# pre-commit：对暂存的 Java / Gradle 源文件自动执行 Spotless 格式化并重新暂存
+export JAVA_HOME="${JAVA_HOME:-$HOME/.sdkman/candidates/java/current}"
+export PATH="$JAVA_HOME/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+repo_root="$(git rev-parse --show-toplevel)" || exit 1
+cd "$repo_root" || exit 1
+
+staged_files="$(git diff --cached --name-only --diff-filter=ACMR -- '*.java' '*.gradle.kts')"
+[ -z "$staged_files" ] && exit 0
+
+if [ -x "./gradlew" ]; then
+    gradle_cmd="./gradlew"
+elif [ -f "./gradlew.bat" ]; then
+    gradle_cmd="cmd.exe /c gradlew.bat"
+else
+    exit 0
+fi
+
+echo "[pre-commit] 正在执行 Spotless 自动格式化..."
+if ! $gradle_cmd -q spotlessApply; then
+    echo "[pre-commit] Spotless 格式化失败，提交已中止。" >&2
+    exit 1
+fi
+
+echo "$staged_files" | while IFS= read -r f; do
+    [ -f "$f" ] && git add -- "$f"
+done
+
+exit 0
