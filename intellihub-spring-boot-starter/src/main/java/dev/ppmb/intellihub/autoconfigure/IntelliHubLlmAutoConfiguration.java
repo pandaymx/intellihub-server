@@ -1,5 +1,7 @@
 package dev.ppmb.intellihub.autoconfigure;
 
+import dev.ppmb.intellihub.core.advisor.AiLocalCacheAdvisor;
+import dev.ppmb.intellihub.core.advisor.AiLoggingAndMetricsAdvisor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -12,7 +14,22 @@ public class IntelliHubLlmAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public ChatClient chatClient(ChatClient.Builder builder) {
-        return builder.build();
+    public AiLoggingAndMetricsAdvisor aiLoggingAndMetricsAdvisor() {
+        return new AiLoggingAndMetricsAdvisor();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public AiLocalCacheAdvisor aiLocalCacheAdvisor() {
+        return new AiLocalCacheAdvisor();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ChatClient chatClient(
+            ChatClient.Builder builder,
+            AiLoggingAndMetricsAdvisor loggingAdvisor,
+            AiLocalCacheAdvisor localCacheAdvisor) {
+        return builder.defaultAdvisors(loggingAdvisor, localCacheAdvisor).build();
     }
 }
