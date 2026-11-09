@@ -14,6 +14,14 @@ java {
     }
 }
 
+extra["springAiVersion"] = "2.0.2"
+
+dependencyManagement {
+    imports {
+        mavenBom("org.springframework.ai:spring-ai-bom:${property("springAiVersion")}")
+    }
+}
+
 spotless {
     java {
         target("src/**/*.java")
@@ -31,6 +39,7 @@ spotless {
 
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter")
+    implementation("org.springframework.ai:spring-ai-starter-model-openai")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: intellihub-server
+  ai:
+    openai:
+      api-key: ${INTELLIHUB_AI_API_KEY:sk-placeholder}
+      base-url: ${INTELLIHUB_AI_BASE_URL:https://api.deepseek.com}
+      chat:
+        options:
+          model: ${INTELLIHUB_AI_MODEL:deepseek-chat}
