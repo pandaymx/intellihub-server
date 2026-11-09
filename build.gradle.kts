@@ -73,6 +73,8 @@ subprojects {
                 deps.add(configName, deps.platform(rootProject.libs.springAiBom))
             }
         }
+        deps.add("testImplementation", rootProject.libs.springBootStarterTest)
+        deps.add("testRuntimeOnly", rootProject.libs.junitPlatformLauncher)
 
         tasks.withType<Test>().configureEach {
             useJUnitPlatform()
