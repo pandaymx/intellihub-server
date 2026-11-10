@@ -16,12 +16,6 @@ public class UnifiedChatTurnRequest {
     /** 可选指定模型渠道或高可用路由组（默认使用 demo-mock 或全局默认路由） */
     private String channel;
 
-    /** 可选系统人设提示词 */
-    private String systemPrompt;
-
-    /** 可选关联的 Prompt 模板 ID（如 text-summarizer, customer-service-agent） */
-    private String templateId;
-
     /** 是否开启 ReAct 智能体自动工具调用 */
     private Boolean enableAgent;
 
@@ -67,22 +61,6 @@ public class UnifiedChatTurnRequest {
 
     public void setChannel(String channel) {
         this.channel = channel;
-    }
-
-    public String getSystemPrompt() {
-        return systemPrompt;
-    }
-
-    public void setSystemPrompt(String systemPrompt) {
-        this.systemPrompt = systemPrompt;
-    }
-
-    public String getTemplateId() {
-        return templateId;
-    }
-
-    public void setTemplateId(String templateId) {
-        this.templateId = templateId;
     }
 
     public Boolean getEnableAgent() {

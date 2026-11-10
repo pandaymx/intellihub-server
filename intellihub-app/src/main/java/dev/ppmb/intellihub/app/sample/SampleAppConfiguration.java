@@ -34,6 +34,18 @@ public class SampleAppConfiguration implements WebMvcConfigurer {
     }
 
     @Bean
+    public PromptTemplateSpec defaultCopilotSystemPrompt() {
+        return PromptTemplateSpec.builder("default-copilot-system")
+                .version("v1")
+                .description("对话工作台后端全局主控系统提示词模板（由后端统一管控，不对普通聊天用户开放修改）")
+                .systemTemplate(
+                        "你是 IntelliHub 企业级智能助手。你可以在同一对话窗口中协助用户解答架构规范问题、调用工具查询时间或计算税费、执行带人工审批的敏感操作，并在引用知识库时标注 [#1] 角标。")
+                .userTemplate("{message}")
+                .wrapUserVariablesInXmlTag(true)
+                .build();
+    }
+
+    @Bean
     public PromptTemplateSpec sampleSummarizerPrompt() {
         return PromptTemplateSpec.builder("text-summarizer")
                 .version("v1")

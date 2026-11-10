@@ -163,9 +163,9 @@ public class ChatController {
             return ApiResponse.success(response);
         }
 
-        // 4. 组装多轮消息上下文（System + History + 带 RAG 知识引用的当前 UserMessage）
+        // 4. 组装多轮消息上下文（System 由后端 PromptRegistry 统一管控 + History + 带 RAG 知识引用的当前 UserMessage）
         List<Message> messages = new ArrayList<>();
-        String effectiveSystemPrompt = resolveSystemPrompt(request);
+        String effectiveSystemPrompt = resolveBackendSystemPrompt();
         if (effectiveSystemPrompt != null && !effectiveSystemPrompt.isBlank()) {
             messages.add(new SystemMessage(effectiveSystemPrompt));
         }
@@ -250,21 +250,14 @@ public class ChatController {
         return ApiResponse.success(response);
     }
 
-    private String resolveSystemPrompt(UnifiedChatTurnRequest request) {
-        if (request.getSystemPrompt() != null && !request.getSystemPrompt().isBlank()) {
-            return request.getSystemPrompt().strip();
-        }
-        if (request.getTemplateId() != null && !request.getTemplateId().isBlank()) {
-            try {
-                PromptTemplateSpec spec = promptRegistry.get(request.getTemplateId().strip());
-                if (spec != null
-                        && spec.systemTemplate() != null
-                        && !spec.systemTemplate().isBlank()) {
-                    return spec.systemTemplate();
-                }
-            } catch (Exception ignored) {
-                // 模板不存在时回退默认系统提示词
+    private String resolveBackendSystemPrompt() {
+        try {
+            PromptTemplateSpec spec = promptRegistry.get("default-copilot-system");
+            if (spec != null && spec.systemTemplate() != null && !spec.systemTemplate().isBlank()) {
+                return spec.systemTemplate();
             }
+        } catch (Exception ignored) {
+            // 模板不存在时回退默认系统提示词
         }
         return "你是 IntelliHub 企业级智能助手。你可以在同一对话窗口中协助用户解答架构规范问题、调用工具查询时间或计算税费、执行带人工审批的敏感操作，并在引用知识库时标注 [#1] 角标。";
     }
