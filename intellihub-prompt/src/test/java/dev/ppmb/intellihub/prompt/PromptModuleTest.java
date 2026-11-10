@@ -44,14 +44,13 @@ class PromptModuleTest {
         registry.register(v1);
         registry.register(v2);
 
-        assertThat(registry.getOrThrow("code-review").version()).isEqualTo("v2");
-        assertThat(registry.getOrThrow("code-review", "v1").userTemplate())
-                .isEqualTo("Review v1: {code}");
+        assertThat(registry.get("code-review").version()).isEqualTo("v2");
+        assertThat(registry.get("code-review", "v1").userTemplate()).isEqualTo("Review v1: {code}");
 
         registry.activateVersion("code-review", "v1");
-        assertThat(registry.getOrThrow("code-review").version()).isEqualTo("v1");
+        assertThat(registry.get("code-review").version()).isEqualTo("v1");
 
-        assertThatThrownBy(() -> registry.getOrThrow("missing-id"))
+        assertThatThrownBy(() -> registry.get("missing-id"))
                 .isInstanceOf(IntelliHubException.class)
                 .extracting(ex -> ((IntelliHubException) ex).getCode())
                 .isEqualTo(GlobalErrorCodeConstants.NOT_FOUND.getCode());
@@ -64,7 +63,7 @@ class PromptModuleTest {
                         .version("v1")
                         .systemTemplate(
                                 "You are a classifier for {tenant}. Example format: {\"category\": \"billing\"}")
-                        .addFewShotExample("Refund my order", "{\"category\": \"billing\"}")
+                        .fewShotExample("Refund my order", "{\"category\": \"billing\"}")
                         .userTemplate("Classify ticket: {content}")
                         .defaultVariable("tenant", "IntelliHub")
                         .wrapUserVariablesInXmlTag(true)
