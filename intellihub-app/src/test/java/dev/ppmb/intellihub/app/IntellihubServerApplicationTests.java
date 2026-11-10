@@ -2,6 +2,9 @@ package dev.ppmb.intellihub.app;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.ppmb.intellihub.agent.engine.ReActAgentExecutor;
+import dev.ppmb.intellihub.agent.tool.GovernedToolRegistry;
+import dev.ppmb.intellihub.agent.tool.KnowledgeBaseSearchTool;
 import dev.ppmb.intellihub.core.context.SpringContextHolder;
 import dev.ppmb.intellihub.llm.config.ModelConfig;
 import dev.ppmb.intellihub.llm.factory.ChatModelFactory;
@@ -43,6 +46,10 @@ class IntellihubServerApplicationTests {
 
     @Autowired private RagQueryEngine ragQueryEngine;
 
+    @Autowired private GovernedToolRegistry governedToolRegistry;
+
+    @Autowired private ReActAgentExecutor reActAgentExecutor;
+
     @Test
     void contextLoads() {
         assertThat(chatModel).isNotNull();
@@ -55,6 +62,10 @@ class IntellihubServerApplicationTests {
         assertThat(documentIngestionPipeline).isNotNull();
         assertThat(hybridKnowledgeStore).isNotNull();
         assertThat(ragQueryEngine).isNotNull();
+        assertThat(governedToolRegistry).isNotNull();
+        assertThat(governedToolRegistry.getRegisteredToolNames())
+                .contains(KnowledgeBaseSearchTool.TOOL_NAME);
+        assertThat(reActAgentExecutor).isNotNull();
         assertThat(SpringContextHolder.isInitialized()).isTrue();
         assertThat(SpringContextHolder.getBean(ChatClient.class)).isSameAs(chatClient);
         assertThat(SpringContextHolder.getBean(ChatModel.class)).isSameAs(chatModel);
