@@ -7,7 +7,7 @@ plugins {
     alias(libs.plugins.springBoot) apply false
 }
 
-val sdkReleaseVersion = providers.gradleProperty("intellihub.sdkRelease").map { it.toInt() }.getOrElse(21)
+val sdkReleaseVersion = providers.gradleProperty("intellihub.sdkRelease").map { it.toInt() }.getOrElse(25)
 
 allprojects {
     group = "dev.ppmb"
@@ -71,6 +71,7 @@ subprojects {
             configurations.matching { it.name == configName }.configureEach {
                 deps.add(configName, deps.platform(rootProject.libs.springBootDependencies))
                 deps.add(configName, deps.platform(rootProject.libs.springAiBom))
+                deps.add(configName, deps.platform(rootProject.libs.jinferBom))
             }
         }
         deps.add("testImplementation", rootProject.libs.springBootStarterTest)

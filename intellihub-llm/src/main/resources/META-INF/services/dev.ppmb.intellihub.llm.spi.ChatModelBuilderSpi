@@ -1,0 +1,8 @@
+dev.ppmb.intellihub.llm.spi.provider.OpenAiChatModelBuilderSpi
+dev.ppmb.intellihub.llm.spi.provider.DeepSeekChatModelBuilderSpi
+dev.ppmb.intellihub.llm.spi.provider.AnthropicChatModelBuilderSpi
+dev.ppmb.intellihub.llm.spi.provider.GoogleGenAiChatModelBuilderSpi
+dev.ppmb.intellihub.llm.spi.provider.OllamaChatModelBuilderSpi
+dev.ppmb.intellihub.llm.spi.provider.MistralAiChatModelBuilderSpi
+dev.ppmb.intellihub.llm.spi.provider.BedrockConverseChatModelBuilderSpi
+dev.ppmb.intellihub.llm.spi.provider.JinferChatModelBuilderSpi

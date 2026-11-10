@@ -10,6 +10,7 @@ javaPlatform {
 dependencies {
     api(platform(libs.springBootDependencies))
     api(platform(libs.springAiBom))
+    api(platform(libs.jinferBom))
 
     constraints {
         api(project(":intellihub-core"))

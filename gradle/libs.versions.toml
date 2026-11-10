@@ -1,11 +1,13 @@
 [versions]
 springBoot = "4.1.2"
 springAi = "2.0.2"
+jinfer = "0.3.1"
 spotless = "8.11.0"
 
 [libraries]
 springBootDependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "springBoot" }
 springAiBom = { module = "org.springframework.ai:spring-ai-bom", version.ref = "springAi" }
+jinferBom = { module = "com.qxotic:jinfer-bom", version.ref = "jinfer" }
 
 springBootStarter = { module = "org.springframework.boot:spring-boot-starter" }
 springBootStarterWeb = { module = "org.springframework.boot:spring-boot-starter-web" }
@@ -14,6 +16,15 @@ springBootAutoconfigure = { module = "org.springframework.boot:spring-boot-autoc
 springBootConfigurationProcessor = { module = "org.springframework.boot:spring-boot-configuration-processor" }
 
 springAiStarterModelOpenai = { module = "org.springframework.ai:spring-ai-starter-model-openai" }
+springAiOpenai = { module = "org.springframework.ai:spring-ai-openai" }
+springAiDeepseek = { module = "org.springframework.ai:spring-ai-deepseek" }
+springAiAnthropic = { module = "org.springframework.ai:spring-ai-anthropic" }
+springAiGoogleGenai = { module = "org.springframework.ai:spring-ai-google-genai" }
+springAiOllama = { module = "org.springframework.ai:spring-ai-ollama" }
+springAiMistralAi = { module = "org.springframework.ai:spring-ai-mistral-ai" }
+springAiBedrockConverse = { module = "org.springframework.ai:spring-ai-bedrock-converse" }
+jinferSpringAi = { module = "com.qxotic:jinfer-spring-ai" }
+jinferModelsAll = { module = "com.qxotic:jinfer-models-all" }
 
 junitPlatformLauncher = { module = "org.junit.platform:junit-platform-launcher" }
 
