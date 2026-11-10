@@ -40,11 +40,15 @@ class IntellihubServerApplicationTests {
                                 ModelConfig.of("deepseek", "sk-test", "deepseek-chat")))
                 .isNotNull();
 
+        // 验证 @Primary ChatModel 直接指向 default-ha 高可用路由组
+        assertThat(chatModel)
+                .isInstanceOf(RoutingChatModel.class)
+                .isSameAs(modelRegistry.getDefaultChatModel());
+
         // 验证 application.yml 中的多渠道与高可用路由组自动绑定
         assertThat(modelRegistry.getChannelNames())
                 .contains("deepseek-primary", "qwen-backup", "ollama-local");
         assertThat(modelRegistry.getRouteNames()).contains("default-ha");
-        assertThat(modelRegistry.getDefaultChatModel()).isInstanceOf(RoutingChatModel.class);
         assertThat(modelRegistry.getChatModel("deepseek-primary"))
                 .isInstanceOf(KeyPoolChatModel.class);
         assertThat(modelRegistry.getDefaultChatClient()).isNotNull();

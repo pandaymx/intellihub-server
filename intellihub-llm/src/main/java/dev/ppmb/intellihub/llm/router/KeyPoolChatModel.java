@@ -6,6 +6,7 @@ import dev.ppmb.intellihub.core.exception.IntelliHubExceptionUtil;
 import dev.ppmb.intellihub.llm.config.ModelConfig;
 import dev.ppmb.intellihub.llm.factory.ChatModelFactory;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
@@ -17,9 +18,12 @@ import reactor.core.publisher.Flux;
 /**
  * 基于 {@link ApiKeyPool} 的多 Key 轮询与自动故障切换 {@link ChatModel} 装饰器。
  *
- * <p>每次调用时从 {@link ApiKeyPool} 获取当前健康的 API Key，并通过 {@link ChatModelFactory}
- * 复用该 Key 对应的缓存底层 {@link ChatModel} 实例；若单次调用因限流（429）、超时或单 Key 失效失败，
- * 自动将该 Key 标记冷却并切换池内其余健康 Key 重试。
+ * <ul>
+ *   <li>每次调用时从 {@link ApiKeyPool} 获取当前健康的 API Key，并通过 {@link ChatModelFactory}
+ *       复用该 Key 对应的缓存底层 {@link ChatModel} 实例；
+ *   <li>在流式调用 {@link #stream(Prompt)} 中内置 {@code hasEmitted} 首包状态守卫：仅在<b>首包尚未吐字前</b>发生异常时自动切换
+ *       Key 重试；一旦已有有效文本 Chunk 下发至客户端，若中途断流则直接向上抛出异常，严防半截残句与新回答拼接错乱。
+ * </ul>
  */
 public class KeyPoolChatModel implements ChatModel {
 
@@ -98,27 +102,47 @@ public class KeyPoolChatModel implements ChatModel {
                 delegate = resolveModelForKey(key);
             } catch (Throwable ex) {
                 apiKeyPool.recordFailure(key, ex);
-                return handleStreamError(prompt, attempt, maxAttempts, key, ex);
+                return handleStreamError(prompt, attempt, maxAttempts, key, false, ex);
             }
+            AtomicBoolean hasEmitted = new AtomicBoolean(false);
             return delegate.stream(prompt)
+                    .doOnNext(chunk -> {
+                        if (hasEmittedContent(chunk)) {
+                            hasEmitted.set(true);
+                        }
+                    })
                     .doOnComplete(() -> apiKeyPool.recordSuccess(key))
                     .onErrorResume(ex -> {
                         apiKeyPool.recordFailure(key, ex);
-                        return handleStreamError(prompt, attempt, maxAttempts, key, ex);
+                        return handleStreamError(
+                                prompt, attempt, maxAttempts, key, hasEmitted.get(), ex);
                     });
         });
     }
 
     private Flux<ChatResponse> handleStreamError(
-            Prompt prompt, int attempt, int maxAttempts, String key, Throwable ex) {
+            Prompt prompt,
+            int attempt,
+            int maxAttempts,
+            String key,
+            boolean hasEmitted,
+            Throwable ex) {
         IntelliHubException wrapped = IntelliHubExceptionUtil.wrap(baseConfig.provider(), ex);
+        if (hasEmitted) {
+            log.warn(
+                    "[IntelliHub-KeyPool] Mid-stream failure after token emission on key ({}) of provider [{}], aborting silent retry to prevent garbled output: {}",
+                    ApiKeyPool.maskKey(key),
+                    baseConfig.provider(),
+                    wrapped.getMessage());
+            return Flux.error(wrapped);
+        }
         boolean canSwitchKey =
                 (wrapped.isRetryable() || wrapped instanceof AiAuthenticationException)
                         && attempt < maxAttempts
                         && apiKeyPool.availableKeyCount() > 0;
         if (canSwitchKey) {
             log.warn(
-                    "[IntelliHub-KeyPool] Key ({}) stream failed on provider [{}], switching to next available key (attempt {}/{}): {}",
+                    "[IntelliHub-KeyPool] Pre-first-token stream failure on key ({}) of provider [{}], switching to next available key (attempt {}/{}): {}",
                     ApiKeyPool.maskKey(key),
                     baseConfig.provider(),
                     attempt,
@@ -127,6 +151,20 @@ public class KeyPoolChatModel implements ChatModel {
             return streamWithKeyRetry(prompt, attempt + 1, maxAttempts);
         }
         return Flux.error(wrapped);
+    }
+
+    static boolean hasEmittedContent(ChatResponse chunk) {
+        if (chunk == null || chunk.getResults() == null || chunk.getResults().isEmpty()) {
+            return false;
+        }
+        return chunk.getResults().stream()
+                .anyMatch(gen ->
+                        gen != null
+                                && gen.getOutput() != null
+                                && ((gen.getOutput().getText() != null
+                                                && !gen.getOutput().getText().isEmpty())
+                                        || (gen.getOutput().getToolCalls() != null
+                                                && !gen.getOutput().getToolCalls().isEmpty())));
     }
 
     private ChatModel resolveModelForKey(String apiKey) {

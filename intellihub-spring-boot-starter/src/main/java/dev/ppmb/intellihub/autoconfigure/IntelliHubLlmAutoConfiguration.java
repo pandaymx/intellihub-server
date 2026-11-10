@@ -19,12 +19,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 
 @AutoConfiguration
 @ConditionalOnClass(ChatClient.class)
@@ -131,12 +133,34 @@ public class IntelliHubLlmAutoConfiguration {
         return registry;
     }
 
+    /**
+     * 将 {@link IntelliHubModelRegistry} 的默认高可用路由组/渠道暴露为全局 {@code @Primary} {@link ChatModel}，
+     * 使业务方通过 {@code @Autowired ChatModel} 即可零感知接入主备降级与 KeyPool 能力。
+     */
     @Bean
+    @Primary
+    public ChatModel intelliHubPrimaryChatModel(
+            IntelliHubModelRegistry registry, ChatModelFactory chatModelFactory) {
+        if (!registry.getRouteNames().isEmpty() || !registry.getChannelNames().isEmpty()) {
+            return registry.getDefaultChatModel();
+        }
+        return chatModelFactory.createChatModel(
+                ModelConfig.of("openai", "sk-placeholder", "gpt-4o-mini"));
+    }
+
+    /**
+     * 基于 {@code @Primary} {@link ChatModel} 构建默认挂载了日志指标与本地缓存拦截器的 {@code @Primary} {@link
+     * ChatClient}。
+     */
+    @Bean
+    @Primary
     @ConditionalOnMissingBean
     public ChatClient chatClient(
-            ChatClient.Builder builder,
+            ChatModel primaryChatModel,
             AiLoggingAndMetricsAdvisor loggingAdvisor,
             AiLocalCacheAdvisor localCacheAdvisor) {
-        return builder.defaultAdvisors(loggingAdvisor, localCacheAdvisor).build();
+        return ChatClient.builder(primaryChatModel)
+                .defaultAdvisors(loggingAdvisor, localCacheAdvisor)
+                .build();
     }
 }
