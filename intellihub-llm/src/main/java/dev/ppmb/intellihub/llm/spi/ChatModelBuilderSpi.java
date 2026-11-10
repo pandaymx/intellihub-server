@@ -1,7 +1,11 @@
 package dev.ppmb.intellihub.llm.spi;
 
+import dev.ppmb.intellihub.llm.config.ModelCapability;
 import dev.ppmb.intellihub.llm.config.ModelConfig;
+import dev.ppmb.intellihub.llm.config.ModelProviderType;
+import java.util.Set;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.ChatOptions;
 
 /**
  * 插件化 {@link ChatModel} 构建器 SPI 接口。
@@ -21,6 +25,38 @@ public interface ChatModelBuilderSpi {
      */
     default boolean supports(String provider) {
         return provider != null && provider().equalsIgnoreCase(provider.strip());
+    }
+
+    /**
+     * 返回当前 SPI 主渠道支持的能力元数据集合（Capability Metadata）。
+     */
+    default Set<ModelCapability> capabilities() {
+        return ModelProviderType.fromCode(provider())
+                .map(ModelProviderType::getCapabilities)
+                .orElse(Set.of());
+    }
+
+    /**
+     * 返回指定子渠道/别名支持的能力元数据集合（适用于一对多 SPI，如 {@code OpenAiChatModelBuilderSpi}）。
+     */
+    default Set<ModelCapability> capabilities(String provider) {
+        return ModelProviderType.fromCode(provider)
+                .map(ModelProviderType::getCapabilities)
+                .orElseGet(this::capabilities);
+    }
+
+    /**
+     * 判断指定渠道是否支持某项特定能力。
+     */
+    default boolean supportsCapability(String provider, ModelCapability capability) {
+        return capability != null && capabilities(provider).contains(capability);
+    }
+
+    /**
+     * 仅基于 {@link ModelConfig} 构建轻量级运行时 {@link ChatOptions}（不创建底层连接池或模型实例，适用于按请求动态传参）。
+     */
+    default ChatOptions buildOptions(ModelConfig config) {
+        return build(config).getOptions();
     }
 
     /**

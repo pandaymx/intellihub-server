@@ -29,11 +29,9 @@ public class BedrockConverseChatModelBuilderSpi implements ChatModelBuilderSpi {
     }
 
     @Override
-    public ChatModel build(ModelConfig config) {
+    public BedrockChatOptions buildOptions(ModelConfig config) {
         String model =
                 config.resolveModel(ModelProviderType.AMAZON_BEDROCK_CONVERSE.getDefaultModel());
-        String regionStr = config.getExtraString(ModelConfig.EXTRA_AWS_REGION, DEFAULT_REGION);
-
         BedrockChatOptions.Builder optionsBuilder = BedrockChatOptions.builder().model(model);
         if (config.temperature() != null) {
             optionsBuilder.temperature(config.temperature());
@@ -50,11 +48,17 @@ public class BedrockConverseChatModelBuilderSpi implements ChatModelBuilderSpi {
         if (!config.stopSequences().isEmpty()) {
             optionsBuilder.stopSequences(config.stopSequences());
         }
+        return optionsBuilder.build();
+    }
+
+    @Override
+    public ChatModel build(ModelConfig config) {
+        String regionStr = config.getExtraString(ModelConfig.EXTRA_AWS_REGION, DEFAULT_REGION);
 
         BedrockProxyChatModel.Builder modelBuilder =
                 BedrockProxyChatModel.builder()
                         .region(Region.of(regionStr))
-                        .options(optionsBuilder.build());
+                        .options(buildOptions(config));
 
         if (config.timeout() != null) {
             modelBuilder.timeout(config.timeout());

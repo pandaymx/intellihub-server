@@ -2,8 +2,11 @@ package dev.ppmb.intellihub.autoconfigure;
 
 import dev.ppmb.intellihub.core.advisor.AiLocalCacheAdvisor;
 import dev.ppmb.intellihub.core.advisor.AiLoggingAndMetricsAdvisor;
+import dev.ppmb.intellihub.llm.config.ModelProviderType;
 import dev.ppmb.intellihub.llm.factory.ChatModelFactory;
 import dev.ppmb.intellihub.llm.spi.ChatModelBuilderSpi;
+import dev.ppmb.intellihub.llm.spi.dialect.OpenAiDialectCustomizer;
+import dev.ppmb.intellihub.llm.spi.provider.OpenAiChatModelBuilderSpi;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -30,8 +33,16 @@ public class IntelliHubLlmAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public ChatModelFactory chatModelFactory(
-            ObjectProvider<ChatModelBuilderSpi> customBuilderSpis) {
+            ObjectProvider<ChatModelBuilderSpi> customBuilderSpis,
+            ObjectProvider<OpenAiDialectCustomizer> customDialectCustomizers) {
         ChatModelFactory factory = new ChatModelFactory();
+        factory.findBuilder(ModelProviderType.OPENAI.getCode())
+                .filter(OpenAiChatModelBuilderSpi.class::isInstance)
+                .map(OpenAiChatModelBuilderSpi.class::cast)
+                .ifPresent(openAiSpi ->
+                        customDialectCustomizers
+                                .orderedStream()
+                                .forEach(openAiSpi::registerDialectCustomizer));
         customBuilderSpis.orderedStream().forEach(factory::register);
         return factory;
     }

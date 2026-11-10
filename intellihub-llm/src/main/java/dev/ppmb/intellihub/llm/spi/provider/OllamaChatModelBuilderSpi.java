@@ -3,13 +3,14 @@ package dev.ppmb.intellihub.llm.spi.provider;
 import dev.ppmb.intellihub.llm.config.ModelConfig;
 import dev.ppmb.intellihub.llm.config.ModelProviderType;
 import dev.ppmb.intellihub.llm.spi.ChatModelBuilderSpi;
+import dev.ppmb.intellihub.llm.spi.support.SharedHttpClientSupport;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.ollama.api.OllamaApi;
 import org.springframework.ai.ollama.api.OllamaChatOptions;
 
 /**
- * 基于 Spring AI 原生 {@link OllamaChatModel} 的构建器。
+ * 基于 Spring AI 原生 {@link OllamaChatModel} 的构建器（复用全局共享 HTTP 连接池）。
  */
 public class OllamaChatModelBuilderSpi implements ChatModelBuilderSpi {
 
@@ -24,11 +25,8 @@ public class OllamaChatModelBuilderSpi implements ChatModelBuilderSpi {
     }
 
     @Override
-    public ChatModel build(ModelConfig config) {
-        String baseUrl = config.resolveBaseUrl(ModelProviderType.OLLAMA.getDefaultBaseUrl());
+    public OllamaChatOptions buildOptions(ModelConfig config) {
         String model = config.resolveModel(ModelProviderType.OLLAMA.getDefaultModel());
-
-        OllamaApi ollamaApi = OllamaApi.builder().baseUrl(baseUrl).build();
         OllamaChatOptions.Builder optionsBuilder = OllamaChatOptions.builder().model(model);
 
         if (config.temperature() != null) {
@@ -64,10 +62,19 @@ public class OllamaChatModelBuilderSpi implements ChatModelBuilderSpi {
                         optionsBuilder.disableThinking();
                     }
                 });
+        return optionsBuilder.build();
+    }
 
-        return OllamaChatModel.builder()
-                .ollamaApi(ollamaApi)
-                .options(optionsBuilder.build())
-                .build();
+    @Override
+    public ChatModel build(ModelConfig config) {
+        String baseUrl = config.resolveBaseUrl(ModelProviderType.OLLAMA.getDefaultBaseUrl());
+        OllamaApi ollamaApi =
+                OllamaApi.builder()
+                        .baseUrl(baseUrl)
+                        .restClientBuilder(SharedHttpClientSupport.sharedRestClientBuilder())
+                        .webClientBuilder(SharedHttpClientSupport.sharedWebClientBuilder())
+                        .build();
+
+        return OllamaChatModel.builder().ollamaApi(ollamaApi).options(buildOptions(config)).build();
     }
 }

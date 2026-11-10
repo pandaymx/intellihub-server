@@ -4,6 +4,7 @@ plugins {
 
 dependencies {
     api(project(":intellihub-core"))
+    api(libs.caffeine)
     api(libs.springAiStarterModelOpenai)
     api(libs.springAiDeepseek)
     api(libs.springAiAnthropic)

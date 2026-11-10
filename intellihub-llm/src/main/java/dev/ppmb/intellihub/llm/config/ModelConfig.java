@@ -1,15 +1,21 @@
 package dev.ppmb.intellihub.llm.config;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.Collections;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.TreeMap;
 
 /**
- * 统一 AI 模型配置对象（支持通用采样参数 + {@code extras} 插件化扩展属性）。
+ * 统一 AI 模型配置对象（支持通用采样参数 + {@code extras} 插件化扩展属性 + 指纹计算）。
  *
  * <p>配合 {@link dev.ppmb.intellihub.llm.spi.ChatModelBuilderSpi}，既可传递跨模型通用的
  * {@code provider}、{@code apiKey}、{@code baseUrl}、{@code model}、{@code temperature}，
@@ -22,10 +28,10 @@ public final class ModelConfig {
     /** 是否启用深度思考 / Reasoning（Boolean） */
     public static final String EXTRA_THINKING_ENABLED = "thinkingEnabled";
 
-    /** 思考 Token 预算（Integer / Long，适用于 Anthropic Claude / Google GenAI / Jinfer） */
+    /** 思考 Token 预算（Integer / Long，适用于 Anthropic Claude / Google GenAI / Jinfer / Qwen） */
     public static final String EXTRA_THINKING_BUDGET = "thinkingBudget";
 
-    /** 推理强度（String，如 "low", "medium", "high", "max"，适用于 OpenAI / DeepSeek / Mistral） */
+    /** 推理强度（String，如 "low", "medium", "high", "max"，适用于 OpenAI / DeepSeek） */
     public static final String EXTRA_REASONING_EFFORT = "reasoningEffort";
 
     /** Azure OpenAI 部署名称（String） */
@@ -72,6 +78,9 @@ public final class ModelConfig {
 
     /** Qxotic Jinfer 投机采样深度（Integer） */
     public static final String EXTRA_JINFER_SPECULATION_DEPTH = "speculationDepth";
+
+    /** 显式标记当前自定义渠道遵循 OpenAI 兼容协议（Boolean，适用于未在枚举内的私有 vLLM / OneAPI 等网关） */
+    public static final String EXTRA_OPENAI_COMPATIBLE = "openaiCompatible";
 
     private final String provider;
     private final String apiKey;
@@ -211,6 +220,85 @@ public final class ModelConfig {
     }
 
     /**
+     * 计算底层连接/引擎级 SHA-256 指纹（脱敏 {@code apiKey}，仅包含影响 HTTP 客户端连接池或本地权重加载的字段）。
+     *
+     * <p>用于复用底层 {@code RestClient} / {@code WebClient} / AWS SDK Client / Google GenAI Client /
+     * Jinfer 本地模型引擎。
+     */
+    public String connectionFingerprint() {
+        StringBuilder sb = new StringBuilder(256);
+        sb.append("provider=").append(provider.strip().toLowerCase(Locale.ROOT)).append('|');
+        sb.append("baseUrl=").append(baseUrl == null ? "" : baseUrl.strip()).append('|');
+        sb.append("apiKey=").append(apiKey == null ? "" : apiKey.strip()).append('|');
+        sb.append("timeout=").append(timeout == null ? "" : timeout.toMillis()).append('|');
+        sb.append("maxRetries=").append(maxRetries == null ? "" : maxRetries).append('|');
+        if (!customHeaders.isEmpty()) {
+            new TreeMap<>(customHeaders)
+                    .forEach((k, v) ->
+                            sb.append("hdr:").append(k).append('=').append(v).append('|'));
+        }
+        appendExtraIfPresent(sb, EXTRA_ORGANIZATION_ID);
+        appendExtraIfPresent(sb, EXTRA_DEPLOYMENT_NAME);
+        appendExtraIfPresent(sb, EXTRA_AWS_REGION);
+        appendExtraIfPresent(sb, EXTRA_AWS_ACCESS_KEY_ID);
+        appendExtraIfPresent(sb, EXTRA_AWS_SECRET_ACCESS_KEY);
+        appendExtraIfPresent(sb, EXTRA_AWS_SESSION_TOKEN);
+        appendExtraIfPresent(sb, EXTRA_VERTEX_AI);
+        appendExtraIfPresent(sb, EXTRA_GCP_PROJECT);
+        appendExtraIfPresent(sb, EXTRA_GCP_LOCATION);
+        appendExtraIfPresent(sb, EXTRA_JINFER_MODEL_PATH);
+        appendExtraIfPresent(sb, EXTRA_JINFER_CONTEXT_CAPACITY);
+        appendExtraIfPresent(sb, EXTRA_JINFER_RETAIN_SESSIONS);
+        appendExtraIfPresent(sb, EXTRA_JINFER_SPECULATION_DEPTH);
+        appendExtraIfPresent(sb, EXTRA_OPENAI_COMPATIBLE);
+        if (ModelProviderType.QXOTIC_JINFER.matches(provider)
+                && getExtraString(EXTRA_JINFER_MODEL_PATH).isEmpty()) {
+            sb.append("jinferModel=").append(model == null ? "" : model.strip()).append('|');
+        }
+        return sha256Hex(sb.toString());
+    }
+
+    /**
+     * 计算完整配置的 SHA-256 缓存键（包含连接级指纹 + 模型与采样参数），用于 {@link
+     * dev.ppmb.intellihub.llm.factory.ChatModelFactory} 的 Caffeine 实例缓存。
+     */
+    public String cacheKey() {
+        StringBuilder sb = new StringBuilder(384);
+        sb.append("conn=").append(connectionFingerprint()).append('|');
+        sb.append("model=").append(model == null ? "" : model.strip()).append('|');
+        sb.append("temp=").append(temperature).append('|');
+        sb.append("topP=").append(topP).append('|');
+        sb.append("topK=").append(topK).append('|');
+        sb.append("maxTokens=").append(maxTokens).append('|');
+        sb.append("freqPenalty=").append(frequencyPenalty).append('|');
+        sb.append("presPenalty=").append(presencePenalty).append('|');
+        sb.append("stop=").append(stopSequences).append('|');
+        if (!extras.isEmpty()) {
+            new TreeMap<>(extras)
+                    .forEach((k, v) ->
+                            sb.append("ext:").append(k).append('=').append(v).append('|'));
+        }
+        return sha256Hex(sb.toString());
+    }
+
+    private void appendExtraIfPresent(StringBuilder sb, String key) {
+        Object val = extras.get(key);
+        if (val != null) {
+            sb.append("ext:").append(key).append('=').append(val).append('|');
+        }
+    }
+
+    private static String sha256Hex(String input) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException ex) {
+            return Integer.toHexString(input.hashCode());
+        }
+    }
+
+    /**
      * 按指定类型读取扩展属性。
      */
     public <T> Optional<T> getExtra(String key, Class<T> type) {
@@ -283,6 +371,51 @@ public final class ModelConfig {
 
     public Builder toBuilder() {
         return new Builder(this);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof ModelConfig that)) {
+            return false;
+        }
+        return Objects.equals(provider, that.provider)
+                && Objects.equals(apiKey, that.apiKey)
+                && Objects.equals(baseUrl, that.baseUrl)
+                && Objects.equals(model, that.model)
+                && Objects.equals(temperature, that.temperature)
+                && Objects.equals(topP, that.topP)
+                && Objects.equals(topK, that.topK)
+                && Objects.equals(maxTokens, that.maxTokens)
+                && Objects.equals(frequencyPenalty, that.frequencyPenalty)
+                && Objects.equals(presencePenalty, that.presencePenalty)
+                && Objects.equals(stopSequences, that.stopSequences)
+                && Objects.equals(timeout, that.timeout)
+                && Objects.equals(maxRetries, that.maxRetries)
+                && Objects.equals(customHeaders, that.customHeaders)
+                && Objects.equals(extras, that.extras);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(
+                provider,
+                apiKey,
+                baseUrl,
+                model,
+                temperature,
+                topP,
+                topK,
+                maxTokens,
+                frequencyPenalty,
+                presencePenalty,
+                stopSequences,
+                timeout,
+                maxRetries,
+                customHeaders,
+                extras);
     }
 
     public static final class Builder {
@@ -413,6 +546,13 @@ public final class ModelConfig {
             return this;
         }
 
+        public Builder withoutExtra(String key) {
+            if (key != null) {
+                this.extras.remove(key);
+            }
+            return this;
+        }
+
         public Builder extras(Map<String, Object> extras) {
             if (extras != null) {
                 this.extras.putAll(extras);
@@ -430,6 +570,10 @@ public final class ModelConfig {
 
         public Builder reasoningEffort(String effort) {
             return extra(EXTRA_REASONING_EFFORT, effort);
+        }
+
+        public Builder openaiCompatible(boolean compatible) {
+            return extra(EXTRA_OPENAI_COMPATIBLE, compatible);
         }
 
         public ModelConfig build() {

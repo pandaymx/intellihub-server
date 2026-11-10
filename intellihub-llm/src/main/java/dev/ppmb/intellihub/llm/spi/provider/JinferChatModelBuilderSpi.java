@@ -26,7 +26,7 @@ public class JinferChatModelBuilderSpi implements ChatModelBuilderSpi {
     }
 
     @Override
-    public ChatModel build(ModelConfig config) {
+    public JinferChatOptions buildOptions(ModelConfig config) {
         JinferChatOptions.Builder optionsBuilder = JinferChatOptions.builder();
         if (config.temperature() != null) {
             optionsBuilder.temperature(config.temperature());
@@ -51,13 +51,17 @@ public class JinferChatModelBuilderSpi implements ChatModelBuilderSpi {
                 .ifPresent(optionsBuilder::thinking);
         config.getExtraInt(ModelConfig.EXTRA_THINKING_BUDGET)
                 .ifPresent(optionsBuilder::maxReasoningTokens);
+        return optionsBuilder.build();
+    }
 
+    @Override
+    public ChatModel build(ModelConfig config) {
         JinferChatModel.Builder modelBuilder =
                 JinferChatModel.builder()
                         .contextCapacity(
                                 config.getExtraInt(ModelConfig.EXTRA_JINFER_CONTEXT_CAPACITY)
                                         .orElse(DEFAULT_CONTEXT_CAPACITY))
-                        .options(optionsBuilder.build());
+                        .options(buildOptions(config));
 
         config.getExtraInt(ModelConfig.EXTRA_JINFER_RETAIN_SESSIONS)
                 .ifPresent(modelBuilder::retainSessions);

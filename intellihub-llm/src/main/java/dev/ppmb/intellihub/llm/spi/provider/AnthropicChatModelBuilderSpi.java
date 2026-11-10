@@ -27,7 +27,7 @@ public class AnthropicChatModelBuilderSpi implements ChatModelBuilderSpi {
     }
 
     @Override
-    public ChatModel build(ModelConfig config) {
+    public AnthropicChatOptions buildOptions(ModelConfig config) {
         if (config.apiKey() == null || config.apiKey().isBlank()) {
             throw IntelliHubExceptionUtil.invalidParamException(
                     "构建 AnthropicChatModel 失败：apiKey 不能为空");
@@ -78,7 +78,11 @@ public class AnthropicChatModelBuilderSpi implements ChatModelBuilderSpi {
                         optionsBuilder.thinkingDisabled();
                     }
                 });
+        return optionsBuilder.build();
+    }
 
-        return AnthropicChatModel.builder().options(optionsBuilder.build()).build();
+    @Override
+    public ChatModel build(ModelConfig config) {
+        return AnthropicChatModel.builder().options(buildOptions(config)).build();
     }
 }

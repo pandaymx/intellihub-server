@@ -6,6 +6,7 @@ import dev.ppmb.intellihub.core.exception.IntelliHubExceptionUtil;
 import dev.ppmb.intellihub.llm.config.ModelConfig;
 import dev.ppmb.intellihub.llm.config.ModelProviderType;
 import dev.ppmb.intellihub.llm.spi.ChatModelBuilderSpi;
+import dev.ppmb.intellihub.llm.spi.support.SharedHttpClientSupport;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
@@ -23,6 +24,36 @@ public class GoogleGenAiChatModelBuilderSpi implements ChatModelBuilderSpi {
     @Override
     public boolean supports(String provider) {
         return ModelProviderType.GOOGLE_GENAI.matches(provider);
+    }
+
+    @Override
+    public GoogleGenAiChatOptions buildOptions(ModelConfig config) {
+        String model = config.resolveModel(ModelProviderType.GOOGLE_GENAI.getDefaultModel());
+        GoogleGenAiChatOptions.Builder optionsBuilder =
+                GoogleGenAiChatOptions.builder().model(model);
+
+        if (config.temperature() != null) {
+            optionsBuilder.temperature(config.temperature());
+        }
+        if (config.topP() != null) {
+            optionsBuilder.topP(config.topP());
+        }
+        if (config.topK() != null) {
+            optionsBuilder.topK(config.topK());
+        }
+        if (config.maxTokens() != null) {
+            optionsBuilder.maxOutputTokens(config.maxTokens());
+        }
+        if (!config.stopSequences().isEmpty()) {
+            optionsBuilder.stopSequences(config.stopSequences());
+        }
+
+        config.getExtraBoolean(ModelConfig.EXTRA_THINKING_ENABLED)
+                .ifPresent(optionsBuilder::includeThoughts);
+        config.getExtraInt(ModelConfig.EXTRA_THINKING_BUDGET)
+                .ifPresent(optionsBuilder::thinkingBudget);
+
+        return optionsBuilder.build();
     }
 
     @Override
@@ -60,34 +91,13 @@ public class GoogleGenAiChatModelBuilderSpi implements ChatModelBuilderSpi {
             clientBuilder.httpOptions(httpBuilder.build());
         }
 
-        String model = config.resolveModel(ModelProviderType.GOOGLE_GENAI.getDefaultModel());
-        GoogleGenAiChatOptions.Builder optionsBuilder =
-                GoogleGenAiChatOptions.builder().model(model);
-
-        if (config.temperature() != null) {
-            optionsBuilder.temperature(config.temperature());
-        }
-        if (config.topP() != null) {
-            optionsBuilder.topP(config.topP());
-        }
-        if (config.topK() != null) {
-            optionsBuilder.topK(config.topK());
-        }
-        if (config.maxTokens() != null) {
-            optionsBuilder.maxOutputTokens(config.maxTokens());
-        }
-        if (!config.stopSequences().isEmpty()) {
-            optionsBuilder.stopSequences(config.stopSequences());
-        }
-
-        config.getExtraBoolean(ModelConfig.EXTRA_THINKING_ENABLED)
-                .ifPresent(optionsBuilder::includeThoughts);
-        config.getExtraInt(ModelConfig.EXTRA_THINKING_BUDGET)
-                .ifPresent(optionsBuilder::thinkingBudget);
-
-        return GoogleGenAiChatModel.builder()
-                .genAiClient(clientBuilder.build())
-                .options(optionsBuilder.build())
-                .build();
+        Client genAiClient = clientBuilder.build();
+        GoogleGenAiChatModel chatModel =
+                GoogleGenAiChatModel.builder()
+                        .genAiClient(genAiClient)
+                        .options(buildOptions(config))
+                        .build();
+        SharedHttpClientSupport.attachCloseable(chatModel, genAiClient);
+        return chatModel;
     }
 }

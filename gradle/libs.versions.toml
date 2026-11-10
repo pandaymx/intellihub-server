@@ -25,6 +25,7 @@ springAiMistralAi = { module = "org.springframework.ai:spring-ai-mistral-ai" }
 springAiBedrockConverse = { module = "org.springframework.ai:spring-ai-bedrock-converse" }
 jinferSpringAi = { module = "com.qxotic:jinfer-spring-ai" }
 jinferModelsAll = { module = "com.qxotic:jinfer-models-all" }
+caffeine = { module = "com.github.ben-manes.caffeine:caffeine" }
 
 junitPlatformLauncher = { module = "org.junit.platform:junit-platform-launcher" }
 
