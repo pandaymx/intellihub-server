@@ -7,6 +7,8 @@ import dev.ppmb.intellihub.rag.rerank.DocumentReranker;
 import dev.ppmb.intellihub.rag.rerank.KeywordOverlapReranker;
 import dev.ppmb.intellihub.rag.splitter.SemanticMarkdownDocumentSplitter;
 import dev.ppmb.intellihub.rag.store.HybridKnowledgeStore;
+import dev.ppmb.intellihub.rag.store.LexicalSearchBackend;
+import dev.ppmb.intellihub.rag.store.VectorSearchBackend;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -22,7 +24,8 @@ import org.springframework.context.annotation.Bean;
  * <ul>
  *   <li>{@link SemanticMarkdownDocumentSplitter}：语义感知型 Markdown 文档切分器；
  *   <li>{@link DocumentIngestionPipeline}：支持 SHA-256 幂等去重与租户标签注入的文档摄取流水线；
- *   <li>{@link HybridKnowledgeStore}：向量余弦相似度 + BM25 + RRF 混合知识检索引擎；
+ *   <li>{@link HybridKnowledgeStore}：向量余弦相似度 + BM25 + RRF 混合知识检索引擎（优先注入外部下推的 {@link
+ *       VectorSearchBackend} 与 {@link LexicalSearchBackend}，缺省回退至内置内存双路索引）；
  *   <li>{@link DocumentReranker}：默认 {@link KeywordOverlapReranker} 特征重排器；
  *   <li>{@link RagQueryEngine}：具备上下文窗口预算控制与角标溯源的 RAG 问答引擎。
  * </ul>
@@ -47,7 +50,14 @@ public class IntelliHubRagAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public HybridKnowledgeStore intelliHubHybridKnowledgeStore(
+            ObjectProvider<VectorSearchBackend> vectorBackendProvider,
+            ObjectProvider<LexicalSearchBackend> lexicalBackendProvider,
             ObjectProvider<EmbeddingModel> embeddingModelProvider) {
+        VectorSearchBackend vectorBackend = vectorBackendProvider.getIfUnique();
+        LexicalSearchBackend lexicalBackend = lexicalBackendProvider.getIfUnique();
+        if (vectorBackend != null && lexicalBackend != null) {
+            return new HybridKnowledgeStore(vectorBackend, lexicalBackend);
+        }
         return new HybridKnowledgeStore(embeddingModelProvider.getIfUnique());
     }
 
