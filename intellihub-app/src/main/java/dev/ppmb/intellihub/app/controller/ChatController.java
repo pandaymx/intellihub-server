@@ -229,10 +229,12 @@ public class ChatController {
 
         // 6. 纯对话模式（关闭 Agent 工具时直接调用底层 ChatModel）
         ChatResponse chatResp = chatModel.call(new Prompt(messages));
-        if (chatResp != null && chatResp.getResult() != null) {
-            String rawText = chatResp.getResult().getOutput().getText();
+        if (chatResp != null && chatResp.getResults() != null && !chatResp.getResults().isEmpty()) {
+            String rawText = extractMainResponseText(chatResp);
             response.setContent(AiOutputUtil.stripThink(rawText));
-            String extractedThink = AiOutputUtil.extractThink(rawText);
+            String nativeThought = extractThoughtFromResponse(chatResp);
+            String extractedThink =
+                    !nativeThought.isEmpty() ? nativeThought : AiOutputUtil.extractThink(rawText);
             if (!extractedThink.isEmpty()) {
                 response.setReasoningContent(extractedThink);
             }
@@ -308,22 +310,18 @@ public class ChatController {
         dto.setChannel(targetName);
         dto.setLatencyMs(latency);
 
-        if (response != null && response.getResult() != null) {
-            String rawText = response.getResult().getOutput().getText();
+        if (response != null && response.getResults() != null && !response.getResults().isEmpty()) {
+            String rawText = extractMainResponseText(response);
             dto.setRawContent(rawText);
             dto.setContent(AiOutputUtil.stripThink(rawText));
 
-            if (response.getResult().getOutput() != null) {
-                // 部分模型（如 DeepSeek-R1）的 reasoningContent 特殊字段或内联 <think> 标签支持
-                Object reasoning =
-                        response.getResult().getOutput().getMetadata().get("reasoningContent");
-                if (reasoning instanceof String rs && !rs.isBlank()) {
-                    dto.setReasoningContent(rs);
-                } else {
-                    String extractedThink = AiOutputUtil.extractThink(rawText);
-                    if (!extractedThink.isEmpty()) {
-                        dto.setReasoningContent(extractedThink);
-                    }
+            String nativeThought = extractThoughtFromResponse(response);
+            if (!nativeThought.isEmpty()) {
+                dto.setReasoningContent(nativeThought);
+            } else {
+                String extractedThink = AiOutputUtil.extractThink(rawText);
+                if (!extractedThink.isEmpty()) {
+                    dto.setReasoningContent(extractedThink);
                 }
             }
 
@@ -345,6 +343,60 @@ public class ChatController {
         }
 
         return ApiResponse.success(dto);
+    }
+
+    private static boolean isThoughtMessage(AssistantMessage msg) {
+        if (msg == null || msg.getMetadata() == null) {
+            return false;
+        }
+        return Boolean.TRUE.equals(msg.getMetadata().get("isThought"))
+                || Boolean.TRUE.equals(msg.getMetadata().get("thought"));
+    }
+
+    private static String extractMainResponseText(ChatResponse response) {
+        if (response == null || response.getResults() == null || response.getResults().isEmpty()) {
+            return "";
+        }
+        for (var gen : response.getResults()) {
+            if (gen != null
+                    && gen.getOutput() != null
+                    && !isThoughtMessage(gen.getOutput())
+                    && gen.getOutput().getText() != null
+                    && !gen.getOutput().getText().isBlank()) {
+                return gen.getOutput().getText();
+            }
+        }
+        return response.getResult() != null
+                        && response.getResult().getOutput() != null
+                        && response.getResult().getOutput().getText() != null
+                ? response.getResult().getOutput().getText()
+                : "";
+    }
+
+    private static String extractThoughtFromResponse(ChatResponse response) {
+        if (response == null || response.getResults() == null || response.getResults().isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (var gen : response.getResults()) {
+            if (gen == null || gen.getOutput() == null) {
+                continue;
+            }
+            AssistantMessage msg = gen.getOutput();
+            if (isThoughtMessage(msg) && msg.getText() != null && !msg.getText().isBlank()) {
+                if (!sb.isEmpty()) {
+                    sb.append("\n");
+                }
+                sb.append(msg.getText().strip());
+            } else if (msg.getMetadata().get("reasoningContent") instanceof String rs
+                    && !rs.isBlank()) {
+                if (!sb.isEmpty()) {
+                    sb.append("\n");
+                }
+                sb.append(rs.strip());
+            }
+        }
+        return sb.toString();
     }
 
     /**

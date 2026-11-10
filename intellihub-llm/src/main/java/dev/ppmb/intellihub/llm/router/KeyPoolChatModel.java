@@ -54,7 +54,14 @@ public class KeyPoolChatModel implements ChatModel {
             String key = apiKeyPool.acquireKey();
             try {
                 ChatModel delegate = resolveModelForKey(key);
-                ChatResponse response = delegate.call(prompt);
+                Prompt effectivePrompt =
+                        RoutingChatModel.sanitizePromptForTarget(
+                                prompt,
+                                delegate,
+                                new ModelRouteTarget(
+                                        "keypool", baseConfig.provider(), 1, () -> delegate),
+                                false);
+                ChatResponse response = delegate.call(effectivePrompt);
                 apiKeyPool.recordSuccess(key);
                 return response;
             } catch (Throwable ex) {
@@ -98,14 +105,22 @@ public class KeyPoolChatModel implements ChatModel {
         return Flux.defer(() -> {
             String key = apiKeyPool.acquireKey();
             ChatModel delegate;
+            Prompt effectivePrompt;
             try {
                 delegate = resolveModelForKey(key);
+                effectivePrompt =
+                        RoutingChatModel.sanitizePromptForTarget(
+                                prompt,
+                                delegate,
+                                new ModelRouteTarget(
+                                        "keypool", baseConfig.provider(), 1, () -> delegate),
+                                false);
             } catch (Throwable ex) {
                 apiKeyPool.recordFailure(key, ex);
                 return handleStreamError(prompt, attempt, maxAttempts, key, false, ex);
             }
             AtomicBoolean hasEmitted = new AtomicBoolean(false);
-            return delegate.stream(prompt)
+            return delegate.stream(effectivePrompt)
                     .doOnNext(chunk -> {
                         if (hasEmittedContent(chunk)) {
                             hasEmitted.set(true);

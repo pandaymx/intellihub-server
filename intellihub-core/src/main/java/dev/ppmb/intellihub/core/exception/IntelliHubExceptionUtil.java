@@ -53,7 +53,21 @@ public final class IntelliHubExceptionUtil {
         }
 
         Throwable root = unwrapRootCause(throwable);
-        String msg = throwable.getMessage() != null ? throwable.getMessage() : root.toString();
+        String topMsg = throwable.getMessage();
+        String rootMsg = root != null ? root.getMessage() : null;
+        String msg;
+        if (topMsg != null && !topMsg.isBlank()) {
+            if (root != throwable
+                    && rootMsg != null
+                    && !rootMsg.isBlank()
+                    && !topMsg.contains(rootMsg)) {
+                msg = topMsg + " (" + rootMsg + ")";
+            } else {
+                msg = topMsg;
+            }
+        } else {
+            msg = rootMsg != null ? rootMsg : (root != null ? root.toString() : "Unknown error");
+        }
 
         // 1. 识别超时类异常
         if (isTimeout(throwable) || isTimeout(root)) {
@@ -70,10 +84,15 @@ public final class IntelliHubExceptionUtil {
                     throwable);
         }
 
-        // 3. 识别 HTTP 401/403 鉴权失败与 429 限流
+        // 3. 识别 HTTP 401/402/403 鉴权与额度耗尽失败、429 限流
         String lowerMsg = msg.toLowerCase();
         if (lowerMsg.contains("401")
+                || lowerMsg.contains("402")
+                || lowerMsg.contains("403")
                 || lowerMsg.contains("unauthorized")
+                || lowerMsg.contains("forbidden")
+                || lowerMsg.contains("permission_denied")
+                || lowerMsg.contains("credits are depleted")
                 || lowerMsg.contains("invalid api key")
                 || lowerMsg.contains("invalid_api_key")) {
             return new AiAuthenticationException(provider, format("模型凭证鉴权失败: {}", msg), throwable);

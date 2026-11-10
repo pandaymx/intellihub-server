@@ -190,7 +190,9 @@ public class ReActAgentExecutor {
                             toolRegistry.executeApprovedTool(toolName, argsJson, safeContext);
                     responses.add(
                             new ToolResponseMessage.ToolResponse(
-                                    callId, toolName, outcome.observation()));
+                                    callId,
+                                    toolName,
+                                    ensureJsonToolResponse(outcome.observation())));
                     records.add(
                             new AgentStepTrace.ToolCallExecutionRecord(
                                     callId,
@@ -221,7 +223,7 @@ public class ReActAgentExecutor {
                         toolRegistry.executeTool(toolName, argsJson, safeContext);
                 responses.add(
                         new ToolResponseMessage.ToolResponse(
-                                callId, toolName, outcome.observation()));
+                                callId, toolName, ensureJsonToolResponse(outcome.observation())));
                 records.add(
                         new AgentStepTrace.ToolCallExecutionRecord(
                                 callId,
@@ -275,7 +277,8 @@ public class ReActAgentExecutor {
             int initialToolCalls,
             long initialTokens) {
         List<ToolCallback> activeTools = toolRegistry.resolveToolCallbacks(enabledToolNames);
-        ChatOptions loopOptions = buildToolAwareOptions(baseOptions, activeTools, baseToolContext);
+        ChatOptions loopOptions =
+                buildToolAwareOptions(chatModel, baseOptions, activeTools, baseToolContext);
 
         long startWallMs = System.currentTimeMillis();
         long deadlineMs = startWallMs + effectiveBudget.maxExecutionDuration().toMillis();
@@ -307,8 +310,10 @@ public class ReActAgentExecutor {
             totalTokens += extractTokenUsage(response);
 
             AssistantMessage assistantMsg = extractAssistantMessage(response);
+            String nativeThought = extractNativeThought(response);
             String rawText = assistantMsg.getText() == null ? "" : assistantMsg.getText();
-            String extractedThink = AiOutputUtil.extractThink(rawText);
+            String inlineThink = AiOutputUtil.extractThink(rawText);
+            String extractedThink = !nativeThought.isEmpty() ? nativeThought : inlineThink;
             String cleanText = AiOutputUtil.stripThink(rawText);
 
             // 若模型未发起任何工具调用，说明已完成推理并直接给出最终答案
@@ -352,7 +357,8 @@ public class ReActAgentExecutor {
                                     + effectiveBudget.maxTotalTokens()
                                     + ") reached. Synthesize final answer immediately.";
                     toolResponses.add(
-                            new ToolResponseMessage.ToolResponse(callId, toolName, tokenMsg));
+                            new ToolResponseMessage.ToolResponse(
+                                    callId, toolName, ensureJsonToolResponse(tokenMsg)));
                     toolRecords.add(
                             new AgentStepTrace.ToolCallExecutionRecord(
                                     callId, toolName, argsJson, tokenMsg, false, false, false, 0L));
@@ -367,7 +373,8 @@ public class ReActAgentExecutor {
                                     + effectiveBudget.maxTotalToolCalls()
                                     + ") reached. Synthesize your final answer from existing observations.";
                     toolResponses.add(
-                            new ToolResponseMessage.ToolResponse(callId, toolName, budgetMsg));
+                            new ToolResponseMessage.ToolResponse(
+                                    callId, toolName, ensureJsonToolResponse(budgetMsg)));
                     toolRecords.add(
                             new AgentStepTrace.ToolCallExecutionRecord(
                                     callId, toolName, argsJson, budgetMsg, false, false, false,
@@ -393,7 +400,8 @@ public class ReActAgentExecutor {
                                     + (seenCount - 1)
                                     + " time(s). Do NOT call it again with the same arguments; use previous observations to formulate your answer.";
                     toolResponses.add(
-                            new ToolResponseMessage.ToolResponse(callId, toolName, loopObs));
+                            new ToolResponseMessage.ToolResponse(
+                                    callId, toolName, ensureJsonToolResponse(loopObs)));
                     toolRecords.add(
                             new AgentStepTrace.ToolCallExecutionRecord(
                                     callId, toolName, argsJson, loopObs, false, true, false, 0L));
@@ -441,7 +449,7 @@ public class ReActAgentExecutor {
 
                 toolResponses.add(
                         new ToolResponseMessage.ToolResponse(
-                                callId, toolName, outcome.observation()));
+                                callId, toolName, ensureJsonToolResponse(outcome.observation())));
                 toolRecords.add(
                         new AgentStepTrace.ToolCallExecutionRecord(
                                 callId,
@@ -494,7 +502,7 @@ public class ReActAgentExecutor {
         finalMessages.add(
                 new UserMessage(
                         "Execution budget has been reached. Based on all observations gathered above, please provide your best final answer directly without invoking any tools."));
-        ChatOptions textOnlyOptions = stripToolsFromOptions(baseOptions);
+        ChatOptions textOnlyOptions = stripToolsFromOptions(chatModel, baseOptions);
         return chatModel.call(new Prompt(finalMessages, textOnlyOptions));
     }
 
@@ -510,10 +518,22 @@ public class ReActAgentExecutor {
     }
 
     private static ChatOptions buildToolAwareOptions(
+            ChatModel chatModel,
             ChatOptions baseOptions,
             List<ToolCallback> callbacks,
             Map<String, Object> toolContext) {
-        ToolCallingChatOptions.Builder<?> builder = ToolCallingChatOptions.builder();
+        ChatOptions modelDefault = chatModel != null ? chatModel.getOptions() : null;
+        ToolCallingChatOptions.Builder<?> builder;
+        if (baseOptions instanceof ToolCallingChatOptions baseToolOpts
+                && (modelDefault == null
+                        || modelDefault.getClass().isAssignableFrom(baseOptions.getClass()))) {
+            builder = baseToolOpts.mutate();
+        } else if (modelDefault instanceof ToolCallingChatOptions modelToolOpts) {
+            builder = modelToolOpts.mutate();
+        } else {
+            builder = ToolCallingChatOptions.builder();
+        }
+
         if (baseOptions != null) {
             if (baseOptions.getModel() != null) {
                 builder.model(baseOptions.getModel());
@@ -549,29 +569,121 @@ public class ReActAgentExecutor {
         return builder.build();
     }
 
-    private static ChatOptions stripToolsFromOptions(ChatOptions baseOptions) {
-        if (baseOptions == null) {
+    private static ChatOptions stripToolsFromOptions(ChatModel chatModel, ChatOptions baseOptions) {
+        ChatOptions modelDefault = chatModel != null ? chatModel.getOptions() : null;
+        ChatOptions seed = baseOptions != null ? baseOptions : modelDefault;
+        if (seed == null) {
             return null;
         }
+        if (modelDefault instanceof ToolCallingChatOptions modelToolOpts) {
+            ToolCallingChatOptions.Builder<?> builder = modelToolOpts.mutate();
+            if (baseOptions != null) {
+                if (baseOptions.getModel() != null) {
+                    builder.model(baseOptions.getModel());
+                }
+                if (baseOptions.getTemperature() != null) {
+                    builder.temperature(baseOptions.getTemperature());
+                }
+                if (baseOptions.getTopP() != null) {
+                    builder.topP(baseOptions.getTopP());
+                }
+                if (baseOptions.getTopK() != null) {
+                    builder.topK(baseOptions.getTopK());
+                }
+                if (baseOptions.getMaxTokens() != null) {
+                    builder.maxTokens(baseOptions.getMaxTokens());
+                }
+                if (baseOptions.getStopSequences() != null) {
+                    builder.stopSequences(baseOptions.getStopSequences());
+                }
+            }
+            builder.toolCallbacks(List.of());
+            return builder.build();
+        }
         return ChatOptions.builder()
-                .model(baseOptions.getModel())
-                .temperature(baseOptions.getTemperature())
-                .topP(baseOptions.getTopP())
-                .topK(baseOptions.getTopK())
-                .maxTokens(baseOptions.getMaxTokens())
-                .stopSequences(baseOptions.getStopSequences())
-                .frequencyPenalty(baseOptions.getFrequencyPenalty())
-                .presencePenalty(baseOptions.getPresencePenalty())
+                .model(seed.getModel())
+                .temperature(seed.getTemperature())
+                .topP(seed.getTopP())
+                .topK(seed.getTopK())
+                .maxTokens(seed.getMaxTokens())
+                .stopSequences(seed.getStopSequences())
+                .frequencyPenalty(seed.getFrequencyPenalty())
+                .presencePenalty(seed.getPresencePenalty())
                 .build();
     }
 
+    private static boolean isThoughtMessage(AssistantMessage msg) {
+        if (msg == null || msg.getMetadata() == null) {
+            return false;
+        }
+        return Boolean.TRUE.equals(msg.getMetadata().get("isThought"))
+                || Boolean.TRUE.equals(msg.getMetadata().get("thought"));
+    }
+
     private static AssistantMessage extractAssistantMessage(ChatResponse response) {
-        if (response == null
-                || response.getResult() == null
-                || response.getResult().getOutput() == null) {
+        if (response == null || response.getResults() == null || response.getResults().isEmpty()) {
             return new AssistantMessage("");
         }
-        return response.getResult().getOutput();
+        for (var gen : response.getResults()) {
+            if (gen != null && gen.getOutput() != null && gen.getOutput().hasToolCalls()) {
+                return gen.getOutput();
+            }
+        }
+        for (var gen : response.getResults()) {
+            if (gen != null && gen.getOutput() != null && !isThoughtMessage(gen.getOutput())) {
+                return gen.getOutput();
+            }
+        }
+        return response.getResult() != null && response.getResult().getOutput() != null
+                ? response.getResult().getOutput()
+                : new AssistantMessage("");
+    }
+
+    private static String extractNativeThought(ChatResponse response) {
+        if (response == null || response.getResults() == null || response.getResults().isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (var gen : response.getResults()) {
+            if (gen == null || gen.getOutput() == null) {
+                continue;
+            }
+            AssistantMessage msg = gen.getOutput();
+            if (isThoughtMessage(msg) && msg.getText() != null && !msg.getText().isBlank()) {
+                if (!sb.isEmpty()) {
+                    sb.append("\n");
+                }
+                sb.append(msg.getText().strip());
+            } else if (msg.getMetadata().get("reasoningContent") instanceof String rc
+                    && !rc.isBlank()) {
+                if (!sb.isEmpty()) {
+                    sb.append("\n");
+                }
+                sb.append(rc.strip());
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String ensureJsonToolResponse(String observation) {
+        if (observation == null || observation.isBlank()) {
+            return "{\"result\":\"\"}";
+        }
+        String trimmed = observation.strip();
+        if ((trimmed.startsWith("{") && trimmed.endsWith("}"))
+                || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+            try {
+                CANONICAL_MAPPER.readTree(trimmed);
+                return trimmed;
+            } catch (Exception ignored) {
+                // 非合法 JSON 时自动包装为 JSON 对象，兼容 GoogleGenAiChatModel 的 FunctionResponse.response 解析
+            }
+        }
+        try {
+            return CANONICAL_MAPPER.writeValueAsString(Map.of("result", observation));
+        } catch (Exception ex) {
+            return "{\"result\":\"tool execution completed\"}";
+        }
     }
 
     /**
