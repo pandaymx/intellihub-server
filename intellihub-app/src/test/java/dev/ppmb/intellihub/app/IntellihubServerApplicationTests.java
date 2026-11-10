@@ -11,6 +11,9 @@ import dev.ppmb.intellihub.llm.router.RoutingChatModel;
 import dev.ppmb.intellihub.prompt.render.SafePromptRenderer;
 import dev.ppmb.intellihub.prompt.structured.StructuredOutputExecutor;
 import dev.ppmb.intellihub.prompt.template.PromptRegistry;
+import dev.ppmb.intellihub.rag.engine.RagQueryEngine;
+import dev.ppmb.intellihub.rag.ingest.DocumentIngestionPipeline;
+import dev.ppmb.intellihub.rag.store.HybridKnowledgeStore;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
@@ -34,6 +37,12 @@ class IntellihubServerApplicationTests {
 
     @Autowired private StructuredOutputExecutor structuredOutputExecutor;
 
+    @Autowired private DocumentIngestionPipeline documentIngestionPipeline;
+
+    @Autowired private HybridKnowledgeStore hybridKnowledgeStore;
+
+    @Autowired private RagQueryEngine ragQueryEngine;
+
     @Test
     void contextLoads() {
         assertThat(chatModel).isNotNull();
@@ -43,6 +52,9 @@ class IntellihubServerApplicationTests {
         assertThat(promptRegistry).isNotNull();
         assertThat(safePromptRenderer).isNotNull();
         assertThat(structuredOutputExecutor).isNotNull();
+        assertThat(documentIngestionPipeline).isNotNull();
+        assertThat(hybridKnowledgeStore).isNotNull();
+        assertThat(ragQueryEngine).isNotNull();
         assertThat(SpringContextHolder.isInitialized()).isTrue();
         assertThat(SpringContextHolder.getBean(ChatClient.class)).isSameAs(chatClient);
         assertThat(SpringContextHolder.getBean(ChatModel.class)).isSameAs(chatModel);
