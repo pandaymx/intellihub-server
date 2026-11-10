@@ -14,6 +14,12 @@ public enum AgentStopReason {
     /** 达到单次任务最大工具调用总次数上限（{@code maxTotalToolCalls}），已触发总结收尾生成 */
     MAX_TOOL_CALLS_REACHED,
 
+    /** 达到单次任务累计 Token 消耗预算上限（{@code maxTotalTokens}），已触发总结收尾生成 */
+    MAX_TOKENS_REACHED,
+
+    /** 遇到需人工异步审批的高风险工具，已保存 {@link AgentCheckpoint} 并释放当前线程 */
+    AWAITING_APPROVAL,
+
     /** 超过最大挂钟执行时长限制（{@code maxExecutionDuration}） */
     TIMEOUT
 }

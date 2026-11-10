@@ -9,9 +9,10 @@ import java.time.Duration;
  * <ul>
  *   <li>{@code maxIterations}：最大推理轮次上限（默认 {@code 8}），防止无限循环对话；
  *   <li>{@code maxTotalToolCalls}：单次任务累计允许调用的工具总次数上限（默认 {@code 16}）；
- *   <li>{@code maxDuplicateToolCalls}：相同 {@code (toolName + arguments)} 指纹允许重复执行的上限（默认 {@code 2}），
- *       超过后直接触发 {@code [LOOP_GUARD]} 拦截并强制推进结论；
- *   <li>{@code maxExecutionDuration}：单次 Agent 运行的最大挂钟时长（默认 {@code 60s}）。
+ *   <li>{@code maxDuplicateToolCalls}：相同 {@code (toolName + canonicalJsonArgs)} 指纹允许重复执行的上限（默认
+ *       {@code 2}），超过后直接触发 {@code [LOOP_GUARD]} 拦截并强制推进结论；
+ *   <li>{@code maxTotalTokens}：单次任务多轮推理累计消耗的最大 Token 预算上限（默认 {@code 32000}），防止长上下文账单失控；
+ *   <li>{@code maxExecutionDuration}：单次 Agent 运行的最大挂钟时长（默认 {@code 60s}），并将剩余毫秒数向下透传给外部工具。
  * </ul>
  */
 public final class AgentExecutionBudget {
@@ -19,11 +20,13 @@ public final class AgentExecutionBudget {
     public static final int DEFAULT_MAX_ITERATIONS = 8;
     public static final int DEFAULT_MAX_TOTAL_TOOL_CALLS = 16;
     public static final int DEFAULT_MAX_DUPLICATE_TOOL_CALLS = 2;
+    public static final long DEFAULT_MAX_TOTAL_TOKENS = 32_000L;
     public static final Duration DEFAULT_MAX_EXECUTION_DURATION = Duration.ofSeconds(60);
 
     private final int maxIterations;
     private final int maxTotalToolCalls;
     private final int maxDuplicateToolCalls;
+    private final long maxTotalTokens;
     private final Duration maxExecutionDuration;
 
     private AgentExecutionBudget(Builder builder) {
@@ -39,9 +42,14 @@ public final class AgentExecutionBudget {
             throw IntelliHubExceptionUtil.invalidParamException(
                     "maxDuplicateToolCalls 必须大于 0，当前值: {}", builder.maxDuplicateToolCalls);
         }
+        if (builder.maxTotalTokens <= 0) {
+            throw IntelliHubExceptionUtil.invalidParamException(
+                    "maxTotalTokens 必须大于 0，当前值: {}", builder.maxTotalTokens);
+        }
         this.maxIterations = builder.maxIterations;
         this.maxTotalToolCalls = builder.maxTotalToolCalls;
         this.maxDuplicateToolCalls = builder.maxDuplicateToolCalls;
+        this.maxTotalTokens = builder.maxTotalTokens;
         this.maxExecutionDuration =
                 builder.maxExecutionDuration != null && !builder.maxExecutionDuration.isNegative()
                         ? builder.maxExecutionDuration
@@ -68,6 +76,10 @@ public final class AgentExecutionBudget {
         return maxDuplicateToolCalls;
     }
 
+    public long maxTotalTokens() {
+        return maxTotalTokens;
+    }
+
     public Duration maxExecutionDuration() {
         return maxExecutionDuration;
     }
@@ -76,6 +88,7 @@ public final class AgentExecutionBudget {
         private int maxIterations = DEFAULT_MAX_ITERATIONS;
         private int maxTotalToolCalls = DEFAULT_MAX_TOTAL_TOOL_CALLS;
         private int maxDuplicateToolCalls = DEFAULT_MAX_DUPLICATE_TOOL_CALLS;
+        private long maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS;
         private Duration maxExecutionDuration = DEFAULT_MAX_EXECUTION_DURATION;
 
         public Builder maxIterations(int maxIterations) {
@@ -90,6 +103,11 @@ public final class AgentExecutionBudget {
 
         public Builder maxDuplicateToolCalls(int maxDuplicateToolCalls) {
             this.maxDuplicateToolCalls = maxDuplicateToolCalls;
+            return this;
+        }
+
+        public Builder maxTotalTokens(long maxTotalTokens) {
+            this.maxTotalTokens = maxTotalTokens;
             return this;
         }
 

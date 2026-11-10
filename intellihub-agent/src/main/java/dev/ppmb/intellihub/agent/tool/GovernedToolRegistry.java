@@ -25,8 +25,10 @@ import org.springframework.ai.tool.method.MethodToolCallbackProvider;
  * <ul>
  *   <li><b>统一工具纳管</b>：支持直接注册 Spring AI {@link ToolCallback}，或自动扫描任意带有 {@link Tool @Tool} 注解的
  *       Java Bean 方法；
- *   <li><b>高风险工具审批门禁（Approval Gate）</b>：被标记为高风险的工具在执行前必须通过 {@link ToolApprovalHandler} 校验；
- *   <li><b>超大返回截断保护（Output Truncation Guard）</b>：限制单次工具返回文本最大长度（默认 {@code 4000} 字符），防止未分页查询撑爆大模型上下文窗口；
+ *   <li><b>高风险工具审批门禁（Approval Gate & Non-Blocking Checkpointing）</b>：支持同步 RBAC 拦截与异步人工审批状态挂起；
+ *   <li><b>超大返回截断与分页引导（Actionable Truncation Guard）</b>：限制单次工具返回文本最大长度（默认 {@code 4000}
+ *       字符），并在截断后缀中明确引导模型缩小过滤条件或使用分页参数；
+ *   <li><b>全局剩余 Deadline 透传</b>：通过 {@link #CONTEXT_REMAINING_DEADLINE_MS} 将剩余超时预算向下传递给工具执行上下文；
  *   <li><b>异常转结构化观察（Error-to-Observation）</b>：捕获工具内部运行时异常并转为结构化错误描述返回给大模型，供下一轮 ReAct 自我修正参数。
  * </ul>
  */
@@ -35,6 +37,7 @@ public class GovernedToolRegistry {
     private static final Logger log = LoggerFactory.getLogger(GovernedToolRegistry.class);
 
     public static final int DEFAULT_MAX_TOOL_OUTPUT_CHARS = 4000;
+    public static final String CONTEXT_REMAINING_DEADLINE_MS = "intellihub.remaining_deadline_ms";
 
     private final Map<String, ToolCallback> tools = new ConcurrentHashMap<>();
     private final Set<String> highRiskTools = ConcurrentHashMap.newKeySet();
@@ -137,10 +140,26 @@ public class GovernedToolRegistry {
     }
 
     /**
-     * 安全执行指定工具调用，返回经审批校验、异常捕获与长度截断后的观察结果。
+     * 安全执行指定工具调用（包含高风险审批检查）。
      */
     public ToolInvocationOutcome executeTool(
             String toolName, String rawJsonArguments, Map<String, Object> contextMap) {
+        return executeToolInternal(toolName, rawJsonArguments, contextMap, false);
+    }
+
+    /**
+     * 在人工审批通过后直接执行工具调用（跳过审批门禁二次拦截）。
+     */
+    public ToolInvocationOutcome executeApprovedTool(
+            String toolName, String rawJsonArguments, Map<String, Object> contextMap) {
+        return executeToolInternal(toolName, rawJsonArguments, contextMap, true);
+    }
+
+    private ToolInvocationOutcome executeToolInternal(
+            String toolName,
+            String rawJsonArguments,
+            Map<String, Object> contextMap,
+            boolean bypassApprovalGate) {
         long start = System.currentTimeMillis();
         String safeArgs =
                 (rawJsonArguments == null || rawJsonArguments.isBlank())
@@ -155,13 +174,30 @@ public class GovernedToolRegistry {
                     "{\"status\":\"ERROR\",\"tool\":\""
                             + escapeJson(toolName)
                             + "\",\"error\":\"Tool not found in GovernedToolRegistry\"}";
-            return new ToolInvocationOutcome(msg, false, false, cost);
+            return new ToolInvocationOutcome(msg, false, false, false, null, cost);
         }
 
         // 1. 高风险工具执行前审批门禁
-        if (isHighRisk(toolName)) {
+        if (!bypassApprovalGate && isHighRisk(toolName)) {
             ToolApprovalHandler.ApprovalDecision decision =
                     approvalHandler.evaluate(toolName, safeArgs, safeContext);
+            if (decision != null && decision.isAwaitingHumanApproval()) {
+                long cost = System.currentTimeMillis() - start;
+                log.info(
+                        "[GovernedToolRegistry] 高风险工具 [{}] 进入异步人工审批挂起状态 (ticket={})",
+                        toolName,
+                        decision.approvalTicketId());
+                String suspendMsg =
+                        "{\"status\":\"AWAITING_HUMAN_APPROVAL\",\"tool\":\""
+                                + escapeJson(toolName)
+                                + "\",\"ticketId\":\""
+                                + escapeJson(decision.approvalTicketId())
+                                + "\",\"reason\":\""
+                                + escapeJson(decision.reason())
+                                + "\"}";
+                return new ToolInvocationOutcome(
+                        suspendMsg, false, false, true, decision.approvalTicketId(), cost);
+            }
             if (decision == null || !decision.approved()) {
                 long cost = System.currentTimeMillis() - start;
                 String reason =
@@ -173,7 +209,7 @@ public class GovernedToolRegistry {
                                 + "\",\"reason\":\""
                                 + escapeJson(reason)
                                 + "\"}";
-                return new ToolInvocationOutcome(msg, false, true, cost);
+                return new ToolInvocationOutcome(msg, false, true, false, null, cost);
             }
         }
 
@@ -182,7 +218,7 @@ public class GovernedToolRegistry {
             String rawResult = callback.call(safeArgs, new ToolContext(safeContext));
             String truncated = truncateOutputIfNeeded(rawResult);
             long cost = System.currentTimeMillis() - start;
-            return new ToolInvocationOutcome(truncated, true, false, cost);
+            return new ToolInvocationOutcome(truncated, true, false, false, null, cost);
         } catch (RuntimeException ex) {
             if (ex instanceof IntelliHubException ihe
                     && Objects.equals(
@@ -204,7 +240,7 @@ public class GovernedToolRegistry {
                                             ? ex.getMessage()
                                             : ex.getClass().getSimpleName())
                             + "\"}";
-            return new ToolInvocationOutcome(errorObs, false, false, cost);
+            return new ToolInvocationOutcome(errorObs, false, false, false, null, cost);
         }
     }
 
@@ -216,9 +252,11 @@ public class GovernedToolRegistry {
             return output;
         }
         return output.substring(0, maxToolOutputChars)
-                + "...[TRUNCATED totalChars="
+                + "\n...[TRUNCATED totalChars="
                 + output.length()
-                + "]";
+                + ", shownChars="
+                + maxToolOutputChars
+                + ". Please narrow down your query filters or use pagination parameters instead of retrying the exact same call.]";
     }
 
     private static String escapeJson(String input) {
@@ -236,5 +274,16 @@ public class GovernedToolRegistry {
     }
 
     public record ToolInvocationOutcome(
-            String observation, boolean success, boolean approvalRejected, long durationMs) {}
+            String observation,
+            boolean success,
+            boolean approvalRejected,
+            boolean awaitingHumanApproval,
+            String approvalTicketId,
+            long durationMs) {
+
+        public ToolInvocationOutcome(
+                String observation, boolean success, boolean approvalRejected, long durationMs) {
+            this(observation, success, approvalRejected, false, null, durationMs);
+        }
+    }
 }
