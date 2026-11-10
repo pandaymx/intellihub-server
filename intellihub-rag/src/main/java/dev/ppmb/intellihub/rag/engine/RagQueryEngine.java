@@ -23,9 +23,11 @@ import org.springframework.ai.chat.prompt.Prompt;
  * <p>完整串联 4 大核心阶段：
  *
  * <ol>
- *   <li><b>混合粗召回（Hybrid Retrieval）</b>：从 {@link HybridKnowledgeStore} 按两倍于目标 {@code topK} 的候选池执行
- *       向量+BM25 RRF 召回与租户元数据过滤；
- *   <li><b>交叉精排（Reranking）</b>：通过 {@link DocumentReranker} 重打分并截取 Top-K 高置信度切片；
+ *   <li><b>自适应宽窗口粗召回（Coarse Recall）</b>：按 {@code Math.max(topK * recallMultiplier,
+ *       minRecallCandidates)}（默认 {@code Math.max(topK * 4, 20)}）从 {@link HybridKnowledgeStore}
+ *       召回充足候选池，避免因粗筛过窄漏掉第 11~20 名的长尾高相关切片；
+ *   <li><b>交叉精排（Reranking）</b>：通过 {@link DocumentReranker}（支持 {@code CrossEncoderHttpReranker}、
+ *       {@code LlmListwiseReranker} 或归一化 {@code KeywordOverlapReranker}）重打分并截取 Top-K 高置信度切片；
  *   <li><b>上下文预算裁剪（Context Budget Guard）</b>：严格控制拼装进 Prompt 的总字符数不超过 {@code maxContextChars}，为每个切片标注
  *       {@code [#1]}、{@code [#2]} 引用编号与章节来源；
  *   <li><b>防幻觉约束生成（Grounded Synthesis）</b>：使用 {@link SafePromptRenderer} 渲染防注入提示词，驱动 {@link
@@ -35,6 +37,9 @@ import org.springframework.ai.chat.prompt.Prompt;
 public class RagQueryEngine {
 
     public static final int DEFAULT_MAX_CONTEXT_CHARS = 6000;
+    public static final int DEFAULT_RECALL_MULTIPLIER = 4;
+    public static final int DEFAULT_MIN_RECALL_CANDIDATES = 20;
+
     public static final String NO_KNOWLEDGE_FALLBACK = "抱歉，当前知识库中未检索到与您问题直接相关的参考资料，无法基于已知事实给出确切回答。";
 
     private static final PromptTemplateSpec DEFAULT_RAG_PROMPT_SPEC =
@@ -53,13 +58,17 @@ public class RagQueryEngine {
     private final DocumentReranker reranker;
     private final SafePromptRenderer promptRenderer;
     private final int maxContextChars;
+    private final int recallMultiplier;
+    private final int minRecallCandidates;
 
     public RagQueryEngine(HybridKnowledgeStore knowledgeStore) {
         this(
                 knowledgeStore,
                 new KeywordOverlapReranker(),
                 new SafePromptRenderer(),
-                DEFAULT_MAX_CONTEXT_CHARS);
+                DEFAULT_MAX_CONTEXT_CHARS,
+                DEFAULT_RECALL_MULTIPLIER,
+                DEFAULT_MIN_RECALL_CANDIDATES);
     }
 
     public RagQueryEngine(
@@ -67,13 +76,44 @@ public class RagQueryEngine {
             DocumentReranker reranker,
             SafePromptRenderer promptRenderer,
             int maxContextChars) {
+        this(
+                knowledgeStore,
+                reranker,
+                promptRenderer,
+                maxContextChars,
+                DEFAULT_RECALL_MULTIPLIER,
+                DEFAULT_MIN_RECALL_CANDIDATES);
+    }
+
+    public RagQueryEngine(
+            HybridKnowledgeStore knowledgeStore,
+            DocumentReranker reranker,
+            SafePromptRenderer promptRenderer,
+            int maxContextChars,
+            int recallMultiplier,
+            int minRecallCandidates) {
         this.knowledgeStore = Objects.requireNonNull(knowledgeStore, "knowledgeStore 不能为空");
         this.reranker = Objects.requireNonNull(reranker, "reranker 不能为空");
         this.promptRenderer = Objects.requireNonNull(promptRenderer, "promptRenderer 不能为空");
         if (maxContextChars < 256) {
             throw new IllegalArgumentException("maxContextChars 不能小于 256");
         }
+        if (recallMultiplier < 1) {
+            throw new IllegalArgumentException("recallMultiplier 不能小于 1");
+        }
+        if (minRecallCandidates < 1) {
+            throw new IllegalArgumentException("minRecallCandidates 不能小于 1");
+        }
         this.maxContextChars = maxContextChars;
+        this.recallMultiplier = recallMultiplier;
+        this.minRecallCandidates = minRecallCandidates;
+    }
+
+    /**
+     * 计算粗召回阶段（Stage 1）的目标候选池大小：{@code Math.max(topK * recallMultiplier, minRecallCandidates)}。
+     */
+    public int computeCoarseRecallLimit(int topK) {
+        return Math.max(Math.max(1, topK) * recallMultiplier, minRecallCandidates);
     }
 
     /**
@@ -91,23 +131,10 @@ public class RagQueryEngine {
         Objects.requireNonNull(request, "request 不能为空");
 
         long t0 = System.currentTimeMillis();
-        // 1. 粗召回（放大 2 倍候选集供 Reranker 精排）
-        RagSearchRequest recallRequest =
-                RagSearchRequest.builder(request.query())
-                        .topK(Math.max(request.topK() * 2, request.topK()))
-                        .minScore(request.minScore())
-                        .searchMode(request.searchMode())
-                        .metadataFilters(request.metadataFilters())
-                        .vectorWeight(request.vectorWeight())
-                        .bm25Weight(request.bm25Weight())
-                        .rrfK(request.rrfK())
-                        .build();
+        // 1. 宽窗口粗召回 + 2. Reranker 精排
+        List<ScoredDocument> reranked = retrieveAndRerank(request);
 
-        List<ScoredDocument> candidates = knowledgeStore.search(recallRequest);
-        List<ScoredDocument> reranked =
-                reranker.rerank(request.query(), candidates, request.topK());
-
-        // 2. 上下文窗口预算裁剪与格式化拼装
+        // 3. 上下文窗口预算裁剪与格式化拼装
         List<ScoredDocument> packedCitations = new ArrayList<>();
         String formattedContext = buildBudgetedContext(reranked, packedCitations);
         long retrievalMs = System.currentTimeMillis() - t0;
@@ -117,7 +144,7 @@ public class RagQueryEngine {
                     NO_KNOWLEDGE_FALLBACK, List.of(), request.query(), retrievalMs, 0L);
         }
 
-        // 3. 渲染防注入 RAG Prompt 并调用 ChatModel
+        // 4. 渲染防注入 RAG Prompt 并调用 ChatModel
         long t1 = System.currentTimeMillis();
         Prompt prompt =
                 promptRenderer.render(
@@ -133,13 +160,14 @@ public class RagQueryEngine {
     }
 
     /**
-     * 仅执行「混合检索 + Rerank 精排」而不调用大模型生成（适用于 Agent 工具调用或搜索预览）。
+     * 仅执行「宽窗口混合粗召回 + Rerank 精排」而不调用大模型生成（适用于 Agent 工具调用或搜索预览）。
      */
     public List<ScoredDocument> retrieveAndRerank(RagSearchRequest request) {
         Objects.requireNonNull(request, "request 不能为空");
+        int coarseLimit = computeCoarseRecallLimit(request.topK());
         RagSearchRequest recallRequest =
                 RagSearchRequest.builder(request.query())
-                        .topK(Math.max(request.topK() * 2, request.topK()))
+                        .topK(coarseLimit)
                         .minScore(request.minScore())
                         .searchMode(request.searchMode())
                         .metadataFilters(request.metadataFilters())
@@ -207,5 +235,13 @@ public class RagQueryEngine {
 
     public int getMaxContextChars() {
         return maxContextChars;
+    }
+
+    public int getRecallMultiplier() {
+        return recallMultiplier;
+    }
+
+    public int getMinRecallCandidates() {
+        return minRecallCandidates;
     }
 }
