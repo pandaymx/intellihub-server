@@ -27,6 +27,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import reactor.core.publisher.Flux;
 
 /**
@@ -283,8 +284,14 @@ public class RoutingChatModel implements ChatModel {
                         .map(ModelProviderType::getCapabilities)
                         .orElse(Set.of());
 
-        ChatOptions.Builder<?> sanitized =
-                targetDefault != null ? targetDefault.mutate() : ChatOptions.builder();
+        ChatOptions.Builder<?> sanitized;
+        if (targetDefault != null) {
+            sanitized = targetDefault.mutate();
+        } else if (incoming instanceof ToolCallingChatOptions) {
+            sanitized = ToolCallingChatOptions.builder();
+        } else {
+            sanitized = ChatOptions.builder();
+        }
 
         if (targetDefault != null
                 && targetDefault.getModel() != null
@@ -292,6 +299,19 @@ public class RoutingChatModel implements ChatModel {
             sanitized.model(targetDefault.getModel());
         } else if (incoming.getModel() != null && !isFallback) {
             sanitized.model(incoming.getModel());
+        }
+
+        if (incoming instanceof ToolCallingChatOptions incomingToolOpts
+                && sanitized instanceof ToolCallingChatOptions.Builder<?> toolBuilder
+                && targetCaps.contains(ModelCapability.TOOL_CALLING)) {
+            if (incomingToolOpts.getToolCallbacks() != null
+                    && !incomingToolOpts.getToolCallbacks().isEmpty()) {
+                toolBuilder.toolCallbacks(incomingToolOpts.getToolCallbacks());
+            }
+            if (incomingToolOpts.getToolContext() != null
+                    && !incomingToolOpts.getToolContext().isEmpty()) {
+                toolBuilder.toolContext(incomingToolOpts.getToolContext());
+            }
         }
 
         if (incoming.getTemperature() != null) {
