@@ -11,14 +11,15 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * 开箱即用的轻量特征融合精排器（Keyword & Section Overlap Reranker）。
+ * 归一化语义保底 + 词法特征融合精排器（Normalized Semantic & Lexical Overlap Reranker）。
  *
- * <p>在保留初筛 RRF / 向量基础分的同时，叠加以下高置信度精排信号：
+ * <p>专门解决 RRF 分数（量纲约 {@code 0.01~0.03}）与字面重合度（量纲 {@code 0.0~1.0}）直接相加导致的量纲失衡问题：
  *
  * <ul>
- *   <li><b>查询词元覆盖率（Query Token Coverage）</b>：衡量切片对查询中关键术语的完整覆盖比例；
- *   <li><b>连续短语精确命中（Exact Substring Boost）</b>：当切片正文中完整出现用户核心短语时显著提权；
- *   <li><b>章节标题路径命中（Section Path Boost）</b>：当 {@code section_path} 标题命中查询词时额外提权。
+ *   <li><b>基础分批次内归一化（Batch Min-Max / Max Normalization）</b>：将粗召回分数投射到 {@code [0, 1]} 区间；
+ *   <li><b>向量语义锚定（Vector Semantic Anchor）</b>：当切片携带 {@code vectorScore}（余弦相似度）时，以 {@code 0.70 *
+ *       vectorScore + 0.30 * normalizedBaseScore} 作为语义主信号（占比 {@code 65%}），确保“字面零重合但向量高相似”的语义切片绝不会被误杀；
+ *   <li><b>词元覆盖、章节路径与连续短语增益</b>：在同等语义相关度下，优先提权命中核心术语、标题路径或完整短语的切片（占比 {@code 35%}）。
  * </ul>
  */
 public class KeywordOverlapReranker implements DocumentReranker {
@@ -34,6 +35,13 @@ public class KeywordOverlapReranker implements DocumentReranker {
 
         Set<String> queryTokens = new LinkedHashSet<>(HybridKnowledgeStore.tokenize(query));
         String normalizedQuery = query.strip().toLowerCase(Locale.ROOT);
+
+        double maxBaseScore =
+                candidates.stream()
+                        .mapToDouble(ScoredDocument::score)
+                        .filter(s -> s > 0.0)
+                        .max()
+                        .orElse(1.0);
 
         List<ScoredDocument> reranked = new ArrayList<>(candidates.size());
         for (ScoredDocument candidate : candidates) {
@@ -66,13 +74,24 @@ public class KeywordOverlapReranker implements DocumentReranker {
             }
 
             double exactPhraseBoost =
-                    (normalizedQuery.length() >= 2 && text.contains(normalizedQuery)) ? 0.25 : 0.0;
+                    (normalizedQuery.length() >= 2 && text.contains(normalizedQuery)) ? 0.20 : 0.0;
+            double lexicalSignal =
+                    Math.min(1.0, 0.55 * coverageScore + 0.25 * sectionBoost + exactPhraseBoost);
 
-            double finalScore =
-                    candidate.score()
-                            + (0.50 * coverageScore)
-                            + (0.25 * sectionBoost)
-                            + exactPhraseBoost;
+            double normalizedBase =
+                    maxBaseScore > 0.0
+                            ? Math.clamp(candidate.score() / maxBaseScore, 0.0, 1.0)
+                            : 0.0;
+
+            double finalScore;
+            if (candidate.vectorScore() != null) {
+                double vectorSim = Math.clamp(candidate.vectorScore(), 0.0, 1.0);
+                double semanticSignal = 0.70 * vectorSim + 0.30 * normalizedBase;
+                finalScore = 0.65 * semanticSignal + 0.35 * lexicalSignal;
+            } else {
+                finalScore = 0.60 * normalizedBase + 0.40 * lexicalSignal;
+            }
+
             reranked.add(candidate.withRerankScore(finalScore));
         }
 
