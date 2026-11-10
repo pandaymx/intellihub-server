@@ -1,2 +1,3 @@
 dev.ppmb.intellihub.autoconfigure.IntelliHubCoreAutoConfiguration
 dev.ppmb.intellihub.autoconfigure.IntelliHubLlmAutoConfiguration
+dev.ppmb.intellihub.autoconfigure.IntelliHubPromptAutoConfiguration

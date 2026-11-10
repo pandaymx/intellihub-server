@@ -8,6 +8,9 @@ import dev.ppmb.intellihub.llm.factory.ChatModelFactory;
 import dev.ppmb.intellihub.llm.registry.IntelliHubModelRegistry;
 import dev.ppmb.intellihub.llm.router.KeyPoolChatModel;
 import dev.ppmb.intellihub.llm.router.RoutingChatModel;
+import dev.ppmb.intellihub.prompt.render.SafePromptRenderer;
+import dev.ppmb.intellihub.prompt.structured.StructuredOutputExecutor;
+import dev.ppmb.intellihub.prompt.template.PromptRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
@@ -25,12 +28,21 @@ class IntellihubServerApplicationTests {
 
     @Autowired private IntelliHubModelRegistry modelRegistry;
 
+    @Autowired private PromptRegistry promptRegistry;
+
+    @Autowired private SafePromptRenderer safePromptRenderer;
+
+    @Autowired private StructuredOutputExecutor structuredOutputExecutor;
+
     @Test
     void contextLoads() {
         assertThat(chatModel).isNotNull();
         assertThat(chatClient).isNotNull();
         assertThat(chatModelFactory).isNotNull();
         assertThat(modelRegistry).isNotNull();
+        assertThat(promptRegistry).isNotNull();
+        assertThat(safePromptRenderer).isNotNull();
+        assertThat(structuredOutputExecutor).isNotNull();
         assertThat(SpringContextHolder.isInitialized()).isTrue();
         assertThat(SpringContextHolder.getBean(ChatClient.class)).isSameAs(chatClient);
         assertThat(SpringContextHolder.getBean(ChatModel.class)).isSameAs(chatModel);
