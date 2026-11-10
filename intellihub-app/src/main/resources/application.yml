@@ -8,3 +8,37 @@ spring:
       chat:
         options:
           model: ${INTELLIHUB_AI_MODEL:deepseek-chat}
+
+intellihub:
+  llm:
+    default-channel: default-ha
+    cache:
+      max-size: 256
+      idle-ttl: 2h
+    channels:
+      deepseek-primary:
+        provider: deepseek
+        api-keys:
+          - ${INTELLIHUB_DEEPSEEK_KEY_1:sk-ds-placeholder-1}
+          - ${INTELLIHUB_DEEPSEEK_KEY_2:sk-ds-placeholder-2}
+        key-cooldown: 60s
+        model: deepseek-chat
+        temperature: 0.7
+      qwen-backup:
+        provider: qwen
+        api-key: ${INTELLIHUB_QWEN_KEY:sk-qwen-placeholder}
+        model: qwen-plus
+        temperature: 0.7
+      ollama-local:
+        provider: ollama
+        base-url: http://localhost:11434
+        model: qwen3:8b
+    routes:
+      default-ha:
+        strategy: FAILOVER
+        failure-threshold: 2
+        cooldown: 30s
+        channels:
+          - deepseek-primary
+          - qwen-backup
+          - ollama-local

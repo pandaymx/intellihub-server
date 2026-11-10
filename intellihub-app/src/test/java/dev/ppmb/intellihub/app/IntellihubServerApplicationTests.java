@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import dev.ppmb.intellihub.core.context.SpringContextHolder;
 import dev.ppmb.intellihub.llm.config.ModelConfig;
 import dev.ppmb.intellihub.llm.factory.ChatModelFactory;
+import dev.ppmb.intellihub.llm.registry.IntelliHubModelRegistry;
+import dev.ppmb.intellihub.llm.router.KeyPoolChatModel;
+import dev.ppmb.intellihub.llm.router.RoutingChatModel;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
@@ -20,11 +23,14 @@ class IntellihubServerApplicationTests {
 
     @Autowired private ChatModelFactory chatModelFactory;
 
+    @Autowired private IntelliHubModelRegistry modelRegistry;
+
     @Test
     void contextLoads() {
         assertThat(chatModel).isNotNull();
         assertThat(chatClient).isNotNull();
         assertThat(chatModelFactory).isNotNull();
+        assertThat(modelRegistry).isNotNull();
         assertThat(SpringContextHolder.isInitialized()).isTrue();
         assertThat(SpringContextHolder.getBean(ChatClient.class)).isSameAs(chatClient);
         assertThat(SpringContextHolder.getBean(ChatModel.class)).isSameAs(chatModel);
@@ -33,5 +39,14 @@ class IntellihubServerApplicationTests {
                         chatModelFactory.createChatModel(
                                 ModelConfig.of("deepseek", "sk-test", "deepseek-chat")))
                 .isNotNull();
+
+        // 验证 application.yml 中的多渠道与高可用路由组自动绑定
+        assertThat(modelRegistry.getChannelNames())
+                .contains("deepseek-primary", "qwen-backup", "ollama-local");
+        assertThat(modelRegistry.getRouteNames()).contains("default-ha");
+        assertThat(modelRegistry.getDefaultChatModel()).isInstanceOf(RoutingChatModel.class);
+        assertThat(modelRegistry.getChatModel("deepseek-primary"))
+                .isInstanceOf(KeyPoolChatModel.class);
+        assertThat(modelRegistry.getDefaultChatClient()).isNotNull();
     }
 }
