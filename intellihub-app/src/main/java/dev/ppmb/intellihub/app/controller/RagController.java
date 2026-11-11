@@ -183,10 +183,47 @@ public class RagController {
     }
 
     /**
-     * 查询知识库当前统计数据（总切片数等）。
+     * 按摄取顺序分页列出已持久化的知识切片（无需搜索关键词）。
+     */
+    @GetMapping("/documents")
+    public ApiResponse<List<ScoredDocumentDto>> listDocuments(
+            @org.springframework.web.bind.annotation.RequestParam(
+                            value = "limit",
+                            defaultValue = "50")
+                    int limit,
+            @org.springframework.web.bind.annotation.RequestParam(
+                            value = "tenantId",
+                            required = false)
+                    String tenantId,
+            @org.springframework.web.bind.annotation.RequestParam(value = "kbId", required = false)
+                    String kbId) {
+        Map<String, Object> filters = new LinkedHashMap<>();
+        if (tenantId != null && !tenantId.isBlank()) {
+            filters.put(DocumentIngestionPipeline.META_TENANT_ID, tenantId.strip());
+        }
+        if (kbId != null && !kbId.isBlank()) {
+            filters.put(DocumentIngestionPipeline.META_KB_ID, kbId.strip());
+        }
+        List<ScoredDocument> docs = knowledgeStore.listAll(limit, filters);
+        return ApiResponse.success(docs.stream().map(ScoredDocumentDto::fromDomain).toList());
+    }
+
+    /**
+     * 查询知识库当前统计数据（总切片数、已向量化切片数、向量维度与持久化状态等）。
      */
     @GetMapping("/stats")
     public ApiResponse<Map<String, Object>> getKnowledgeStats() {
-        return ApiResponse.success(Map.of("totalChunks", knowledgeStore.size()));
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("totalChunks", knowledgeStore.size());
+        stats.put("vectorizedChunks", knowledgeStore.getVectorizedCount());
+        stats.put("vectorAvailable", knowledgeStore.isVectorAvailable());
+        stats.put("vectorDimensions", knowledgeStore.getVectorDimensions());
+        stats.put("persistent", knowledgeStore.isPersistent());
+        stats.put(
+                "persistencePath",
+                knowledgeStore.getPersistencePath() != null
+                        ? knowledgeStore.getPersistencePath()
+                        : "");
+        return ApiResponse.success(stats);
     }
 }

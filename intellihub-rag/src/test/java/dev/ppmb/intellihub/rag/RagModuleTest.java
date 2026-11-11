@@ -358,4 +358,59 @@ class RagModuleTest {
         assertThat(answer.citations().get(0).document().getId()).isEqualTo("kb-ha-1");
         assertThat(answer.answer()).isEqualTo("当遇到 401/403 时，Key 会直接进入 DEAD 状态永久隔离 [#1]。");
     }
+
+    @Test
+    void shouldPersistKnowledgeAndVectorsToDiskAndReloadWithoutRecomputingEmbeddings(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) {
+        java.nio.file.Path storageFile = tempDir.resolve("kb-store.json");
+        AtomicInteger embedCallCount = new AtomicInteger(0);
+
+        EmbeddingModel countingEmbeddingModel =
+                new EmbeddingModel() {
+                    @Override
+                    public EmbeddingResponse call(EmbeddingRequest request) {
+                        List<Embedding> list =
+                                request.getInstructions().stream()
+                                        .map(text -> new Embedding(embed(text), 0))
+                                        .toList();
+                        return new EmbeddingResponse(list);
+                    }
+
+                    @Override
+                    public float[] embed(Document document) {
+                        return embed(document.getText());
+                    }
+
+                    @Override
+                    public float[] embed(String text) {
+                        embedCallCount.incrementAndGet();
+                        return new float[] {0.6f, 0.8f};
+                    }
+                };
+
+        // 1. 首次创建并写入文档，自动计算向量并持久化落盘
+        HybridKnowledgeStore store1 = new HybridKnowledgeStore(countingEmbeddingModel, storageFile);
+        store1.add(
+                Document.builder()
+                        .id("persisted-chunk-1")
+                        .text("Gemini Embedding 768 维向量与本地 JSON 持久化测试")
+                        .metadata(Map.of("tenant_id", "default", "kb_id", "builtin"))
+                        .build());
+
+        assertThat(store1.size()).isEqualTo(1);
+        assertThat(store1.getVectorizedCount()).isEqualTo(1);
+        assertThat(store1.getVectorDimensions()).isEqualTo(2);
+        assertThat(embedCallCount.get()).isEqualTo(1);
+        assertThat(java.nio.file.Files.exists(storageFile)).isTrue();
+
+        // 2. 模拟服务重启，从同一文件恢复：已有向量无需重新调用 EmbeddingModel
+        HybridKnowledgeStore store2 = new HybridKnowledgeStore(countingEmbeddingModel, storageFile);
+        assertThat(store2.size()).isEqualTo(1);
+        assertThat(store2.getVectorizedCount()).isEqualTo(1);
+        assertThat(embedCallCount.get()).isEqualTo(1);
+
+        List<ScoredDocument> listed = store2.listAll(10, Map.of("tenant_id", "default"));
+        assertThat(listed).hasSize(1);
+        assertThat(listed.get(0).document().getId()).isEqualTo("persisted-chunk-1");
+    }
 }

@@ -9,8 +9,10 @@ import dev.ppmb.intellihub.rag.splitter.SemanticMarkdownDocumentSplitter;
 import dev.ppmb.intellihub.rag.store.HybridKnowledgeStore;
 import dev.ppmb.intellihub.rag.store.LexicalSearchBackend;
 import dev.ppmb.intellihub.rag.store.VectorSearchBackend;
+import java.nio.file.Path;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -52,13 +54,24 @@ public class IntelliHubRagAutoConfiguration {
     public HybridKnowledgeStore intelliHubHybridKnowledgeStore(
             ObjectProvider<VectorSearchBackend> vectorBackendProvider,
             ObjectProvider<LexicalSearchBackend> lexicalBackendProvider,
-            ObjectProvider<EmbeddingModel> embeddingModelProvider) {
+            ObjectProvider<EmbeddingModel> embeddingModelProvider,
+            DocumentIngestionPipeline ingestionPipeline,
+            @Value("${intellihub.rag.storage-path:}") String storagePath) {
         VectorSearchBackend vectorBackend = vectorBackendProvider.getIfUnique();
         LexicalSearchBackend lexicalBackend = lexicalBackendProvider.getIfUnique();
         if (vectorBackend != null && lexicalBackend != null) {
             return new HybridKnowledgeStore(vectorBackend, lexicalBackend);
         }
-        return new HybridKnowledgeStore(embeddingModelProvider.getIfUnique());
+        Path persistencePath =
+                (storagePath != null && !storagePath.isBlank())
+                        ? Path.of(storagePath.strip())
+                        : null;
+        HybridKnowledgeStore store =
+                new HybridKnowledgeStore(embeddingModelProvider.getIfUnique(), persistencePath);
+        if (store.size() > 0 && ingestionPipeline != null) {
+            ingestionPipeline.registerExistingDocuments(store.listDocuments());
+        }
+        return store;
     }
 
     @Bean

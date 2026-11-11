@@ -6,6 +6,8 @@ server:
 spring:
   application:
     name: intellihub-server
+  config:
+    import: optional:classpath:application-local.yml,optional:file:./application-local.yml
   ai:
     model:
       embedding: ${INTELLIHUB_AI_EMBEDDING_PROVIDER:none}
@@ -19,12 +21,42 @@ spring:
           model: ${INTELLIHUB_AI_MODEL:deepseek-chat}
 
 intellihub:
+  rag:
+    storage-path: ${INTELLIHUB_RAG_STORAGE_PATH:.intellihub-data/knowledge-store.json}
+  chat:
+    sessions-path: ${INTELLIHUB_CHAT_SESSIONS_PATH:.intellihub-data/chat-sessions.json}
   llm:
     default-channel: default-ha
     cache:
       max-size: 256
       idle-ttl: 2h
+    embedding:
+      enabled: ${INTELLIHUB_EMBEDDING_ENABLED:true}
+      channel: gemini-primary
+      provider: gemini
+      model: ${INTELLIHUB_EMBEDDING_MODEL:gemini-embedding-001}
+      dimensions: 768
     channels:
+      gemini-primary:
+        provider: gemini
+        api-keys:
+          - ${INTELLIHUB_GEMINI_KEY_1:aq-gemini-placeholder-1}
+          - ${INTELLIHUB_GEMINI_KEY_2:aq-gemini-placeholder-2}
+          - ${INTELLIHUB_GEMINI_KEY_3:aq-gemini-placeholder-3}
+        key-cooldown: 60s
+        model: ${INTELLIHUB_GEMINI_MODEL:gemini-3.5-flash-lite}
+        temperature: 0.7
+        extras:
+          thinkingEnabled: true
+          thinkingBudget: 1024
+      gemini-flash:
+        provider: gemini
+        api-key: ${INTELLIHUB_GEMINI_KEY_1:aq-gemini-placeholder-1}
+        model: gemini-3.8-flash
+        temperature: 0.7
+        extras:
+          thinkingEnabled: true
+          thinkingBudget: 1024
       deepseek-primary:
         provider: deepseek
         api-keys:
@@ -45,9 +77,11 @@ intellihub:
     routes:
       default-ha:
         strategy: FAILOVER
-        failure-threshold: 2
+        failure-threshold: 1
         cooldown: 30s
         channels:
+          - gemini-primary
+          - gemini-flash
           - deepseek-primary
           - qwen-backup
           - ollama-local

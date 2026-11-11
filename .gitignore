@@ -35,3 +35,8 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### IntelliHub Runtime Data & Local Secrets ###
+.intellihub-data/
+**/application-local.yml
+application-local.yml

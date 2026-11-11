@@ -50,7 +50,12 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import reactor.core.publisher.Flux;
 
-@SpringBootTest
+@SpringBootTest(
+        properties = {
+            "intellihub.llm.embedding.enabled=false",
+            "intellihub.rag.storage-path=",
+            "intellihub.chat.sessions-path="
+        })
 class IntellihubServerApplicationTests {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

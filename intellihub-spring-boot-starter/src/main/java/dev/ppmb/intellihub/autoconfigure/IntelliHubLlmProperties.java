@@ -24,6 +24,9 @@ public class IntelliHubLlmProperties {
     /** ChatModel 实例本地缓存配置 */
     private CacheProperties cache = new CacheProperties();
 
+    /** Embedding 向量模型配置（{@code intellihub.llm.embedding.*}） */
+    private EmbeddingProperties embedding = new EmbeddingProperties();
+
     /** 命名模型渠道配置字典（key 为渠道名称，如 deepseek-primary、claude-sonnet、qwen-backup） */
     private Map<String, ChannelProperties> channels = new LinkedHashMap<>();
 
@@ -44,6 +47,14 @@ public class IntelliHubLlmProperties {
 
     public void setCache(CacheProperties cache) {
         this.cache = cache != null ? cache : new CacheProperties();
+    }
+
+    public EmbeddingProperties getEmbedding() {
+        return embedding;
+    }
+
+    public void setEmbedding(EmbeddingProperties embedding) {
+        this.embedding = embedding != null ? embedding : new EmbeddingProperties();
     }
 
     public Map<String, ChannelProperties> getChannels() {
@@ -350,6 +361,75 @@ public class IntelliHubLlmProperties {
 
         public void setWeight(int weight) {
             this.weight = weight;
+        }
+    }
+
+    /**
+     * Embedding 向量嵌入模型配置（支持直接引用已有渠道如 {@code gemini-primary} 的 KeyPool 与代理配置）。
+     */
+    public static class EmbeddingProperties {
+        private boolean enabled = false;
+        private String channel;
+        private String provider = "gemini";
+        private String apiKey;
+        private List<String> apiKeys = new ArrayList<>();
+        private String model = "gemini-embedding-001";
+        private int dimensions = 768;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getChannel() {
+            return channel;
+        }
+
+        public void setChannel(String channel) {
+            this.channel = channel;
+        }
+
+        public String getProvider() {
+            return provider;
+        }
+
+        public void setProvider(String provider) {
+            this.provider = provider;
+        }
+
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public void setApiKey(String apiKey) {
+            this.apiKey = apiKey;
+        }
+
+        public List<String> getApiKeys() {
+            return apiKeys;
+        }
+
+        public void setApiKeys(List<String> apiKeys) {
+            this.apiKeys = apiKeys != null ? apiKeys : new ArrayList<>();
+        }
+
+        public String getModel() {
+            return model;
+        }
+
+        public void setModel(String model) {
+            this.model = model;
+        }
+
+        public int getDimensions() {
+            return dimensions;
+        }
+
+        public void setDimensions(int dimensions) {
+            this.dimensions = dimensions;
         }
     }
 }

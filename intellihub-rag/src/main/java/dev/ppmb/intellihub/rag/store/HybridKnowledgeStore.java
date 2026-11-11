@@ -1,8 +1,14 @@
 package dev.ppmb.intellihub.rag.store;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.ppmb.intellihub.rag.retrieval.RagSearchMode;
 import dev.ppmb.intellihub.rag.retrieval.RagSearchRequest;
 import dev.ppmb.intellihub.rag.retrieval.ScoredDocument;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -22,7 +28,7 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
 
 /**
- * 混合知识检索与双路下推编排引擎（Hybrid Knowledge Store：Vector Pushdown + Lexical Pushdown + RRF 融合）。
+ * 混合知识检索与双路下推编排引擎（Hybrid Knowledge Store：Vector Pushdown + Lexical Pushdown + RRF 融合 + 本地磁盘持久化）。
  *
  * <p>架构分层：
  *
@@ -30,13 +36,16 @@ import org.springframework.ai.embedding.EmbeddingModel;
  *   <li><b>可插拔双路下推 SPI（{@link VectorSearchBackend} + {@link LexicalSearchBackend}）</b>：十万/百万级生产规模下，
  *       可直接注入基于 PostgreSQL {@code pgvector}（HNSW 索引）与 {@code pg_search / tsvector}（GIN 倒排索引）或
  *       Elasticsearch 的实现，将元数据过滤、向量最近邻搜索与 BM25 计算 100% 下推到数据库完成；
- *   <li><b>零外部依赖开箱即用默认后端</b>：未注入外部数据库后端时，默认使用内置的线程安全内存双路索引，满足本地研发、单测与中小型知识库极速检索；
+ *   <li><b>本地持久化双路索引（File-Backed Hybrid Index）</b>：当配置了 {@code persistencePath} 时，所有文档切片、元数据及
+ *       预计算的稠密向量（{@code float[]}）均以原子写时替换（Write-Temp-and-Rename）方式持久化至磁盘，重启服务无需重复请求上游 Embedding API；
+ *   <li><b>向量缺失自动回填（Auto-Backfill）</b>：若历史切片在无 Embedding 模型时写入，当后续接入 Gemini Embedding 启动时会自动为缺失向量的切片补齐稠密向量并落盘；
  *   <li><b>O(K log K) 轻量级倒数秩融合（RRF）</b>：仅对两路下推返回的 Top-K 候选并集执行 RRF 排序融合，杜绝应用层全表扫描。
  * </ul>
  */
 public class HybridKnowledgeStore {
 
     private static final Logger log = LoggerFactory.getLogger(HybridKnowledgeStore.class);
+    private static final ObjectMapper PERSISTENCE_MAPPER = new ObjectMapper();
 
     private static final double BM25_K1 = 1.5;
     private static final double BM25_B = 0.75;
@@ -51,21 +60,29 @@ public class HybridKnowledgeStore {
 
     private final VectorSearchBackend vectorBackend;
     private final LexicalSearchBackend lexicalBackend;
+    private final InMemoryHybridIndex builtinIndex;
 
     public HybridKnowledgeStore() {
-        this((EmbeddingModel) null);
+        this((EmbeddingModel) null, null);
     }
 
     public HybridKnowledgeStore(EmbeddingModel embeddingModel) {
-        InMemoryHybridIndex sharedMemoryIndex = new InMemoryHybridIndex(embeddingModel);
+        this(embeddingModel, null);
+    }
+
+    public HybridKnowledgeStore(EmbeddingModel embeddingModel, Path persistencePath) {
+        InMemoryHybridIndex sharedMemoryIndex =
+                new InMemoryHybridIndex(embeddingModel, persistencePath);
         this.vectorBackend = sharedMemoryIndex;
         this.lexicalBackend = sharedMemoryIndex;
+        this.builtinIndex = sharedMemoryIndex;
     }
 
     public HybridKnowledgeStore(
             VectorSearchBackend vectorBackend, LexicalSearchBackend lexicalBackend) {
         this.vectorBackend = Objects.requireNonNull(vectorBackend, "vectorBackend 不能为空");
         this.lexicalBackend = Objects.requireNonNull(lexicalBackend, "lexicalBackend 不能为空");
+        this.builtinIndex = (vectorBackend instanceof InMemoryHybridIndex idx) ? idx : null;
     }
 
     /**
@@ -119,6 +136,45 @@ public class HybridKnowledgeStore {
      */
     public int size() {
         return lexicalBackend.size();
+    }
+
+    public boolean isVectorAvailable() {
+        return vectorBackend.isAvailable();
+    }
+
+    public int getVectorizedCount() {
+        return builtinIndex != null ? builtinIndex.vectorizedCount() : 0;
+    }
+
+    public int getVectorDimensions() {
+        return builtinIndex != null ? builtinIndex.vectorDimensions() : 0;
+    }
+
+    public boolean isPersistent() {
+        return builtinIndex != null && builtinIndex.persistencePath != null;
+    }
+
+    public String getPersistencePath() {
+        return (builtinIndex != null && builtinIndex.persistencePath != null)
+                ? builtinIndex.persistencePath.toAbsolutePath().toString()
+                : null;
+    }
+
+    /**
+     * 获取当前存储中的所有原始 {@link Document} 列表（用于重启后同步去重哈希或后台巡检）。
+     */
+    public List<Document> listDocuments() {
+        return builtinIndex != null ? builtinIndex.listDocuments() : List.of();
+    }
+
+    /**
+     * 列出当前存储中的知识切片（无需搜索关键词，按摄取顺序返回）。
+     */
+    public List<ScoredDocument> listAll(int limit, Map<String, Object> metadataFilters) {
+        if (builtinIndex == null) {
+            return List.of();
+        }
+        return builtinIndex.listAll(limit, metadataFilters);
     }
 
     public VectorSearchBackend getVectorBackend() {
@@ -297,16 +353,22 @@ public class HybridKnowledgeStore {
     }
 
     /**
-     * 默认内置的双路内存索引实现（同时实现 {@link VectorSearchBackend} 与 {@link LexicalSearchBackend}）。
+     * 默认内置的双路索引实现（同时实现 {@link VectorSearchBackend} 与 {@link LexicalSearchBackend}，支持本地文件持久化）。
      */
     private static final class InMemoryHybridIndex
             implements VectorSearchBackend, LexicalSearchBackend {
 
         private final EmbeddingModel embeddingModel;
+        private final Path persistencePath;
         private final Map<String, IndexedEntry> entries = new ConcurrentHashMap<>();
+        private final Object persistLock = new Object();
 
-        private InMemoryHybridIndex(EmbeddingModel embeddingModel) {
+        private InMemoryHybridIndex(EmbeddingModel embeddingModel, Path persistencePath) {
             this.embeddingModel = embeddingModel;
+            this.persistencePath = persistencePath;
+            if (this.persistencePath != null) {
+                loadFromDisk();
+            }
         }
 
         @Override
@@ -314,6 +376,7 @@ public class HybridKnowledgeStore {
             if (documents == null || documents.isEmpty()) {
                 return;
             }
+            boolean changed = false;
             for (Document doc : documents) {
                 if (doc == null || doc.getText() == null || doc.getText().isBlank()) {
                     continue;
@@ -322,33 +385,44 @@ public class HybridKnowledgeStore {
                         doc.getId() != null && !doc.getId().isBlank()
                                 ? doc.getId()
                                 : UUID.randomUUID().toString();
+                float[] vector = computeEmbeddingSafely(doc.getText());
+                Map<String, Object> enrichedMeta = new LinkedHashMap<>(doc.getMetadata());
+                if (vector != null && vector.length > 0) {
+                    enrichedMeta.put("vector_dim", vector.length);
+                }
                 Document normalizedDoc =
-                        (doc.getId() != null && !doc.getId().isBlank())
-                                ? doc
-                                : Document.builder()
-                                        .id(id)
-                                        .text(doc.getText())
-                                        .metadata(doc.getMetadata())
-                                        .build();
+                        Document.builder()
+                                .id(id)
+                                .text(doc.getText())
+                                .metadata(enrichedMeta)
+                                .build();
                 List<String> tokens = tokenize(normalizedDoc.getText());
                 Map<String, Integer> termFreq = new HashMap<>();
                 for (String token : tokens) {
                     termFreq.merge(token, 1, Integer::sum);
                 }
-                float[] vector = computeEmbeddingSafely(normalizedDoc.getText());
                 entries.put(
                         id, new IndexedEntry(id, normalizedDoc, termFreq, tokens.size(), vector));
+                changed = true;
+            }
+            if (changed) {
+                saveToDisk();
             }
         }
 
         @Override
         public boolean delete(String documentId) {
-            return entries.remove(documentId) != null;
+            boolean removed = entries.remove(documentId) != null;
+            if (removed) {
+                saveToDisk();
+            }
+            return removed;
         }
 
         @Override
         public void clear() {
             entries.clear();
+            saveToDisk();
         }
 
         @Override
@@ -359,6 +433,42 @@ public class HybridKnowledgeStore {
         @Override
         public boolean isAvailable() {
             return embeddingModel != null;
+        }
+
+        int vectorizedCount() {
+            int count = 0;
+            for (IndexedEntry e : entries.values()) {
+                if (e.vector() != null && e.vector().length > 0) {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        int vectorDimensions() {
+            for (IndexedEntry e : entries.values()) {
+                if (e.vector() != null && e.vector().length > 0) {
+                    return e.vector().length;
+                }
+            }
+            return embeddingModel != null ? embeddingModel.dimensions() : 0;
+        }
+
+        List<Document> listDocuments() {
+            return entries.values().stream().map(IndexedEntry::document).toList();
+        }
+
+        List<ScoredDocument> listAll(int limit, Map<String, Object> metadataFilters) {
+            List<IndexedEntry> candidates = filterByMetadata(metadataFilters);
+            candidates.sort(Comparator.comparing(IndexedEntry::id));
+            int cap = limit > 0 ? Math.min(limit, candidates.size()) : candidates.size();
+            List<ScoredDocument> result = new ArrayList<>(cap);
+            for (int i = 0; i < cap; i++) {
+                IndexedEntry entry = candidates.get(i);
+                Double vScore = (entry.vector() != null && entry.vector().length > 0) ? 1.0 : null;
+                result.add(new ScoredDocument(entry.document(), 1.0, vScore, 1.0, 1.0));
+            }
+            return result;
         }
 
         @Override
@@ -480,6 +590,108 @@ public class HybridKnowledgeStore {
                 return null;
             }
         }
+
+        private void loadFromDisk() {
+            if (persistencePath == null || !Files.exists(persistencePath)) {
+                return;
+            }
+            synchronized (persistLock) {
+                try {
+                    byte[] raw = Files.readAllBytes(persistencePath);
+                    if (raw.length == 0) {
+                        return;
+                    }
+                    List<PersistedChunkRecord> records =
+                            PERSISTENCE_MAPPER.readValue(
+                                    raw, new TypeReference<List<PersistedChunkRecord>>() {});
+                    boolean backfilledAny = false;
+                    for (PersistedChunkRecord rec : records) {
+                        if (rec == null || rec.text() == null || rec.text().isBlank()) {
+                            continue;
+                        }
+                        String id =
+                                (rec.id() != null && !rec.id().isBlank())
+                                        ? rec.id()
+                                        : UUID.randomUUID().toString();
+                        float[] vec = rec.vector();
+                        if ((vec == null || vec.length == 0) && embeddingModel != null) {
+                            vec = computeEmbeddingSafely(rec.text());
+                            if (vec != null && vec.length > 0) {
+                                backfilledAny = true;
+                            }
+                        }
+                        Map<String, Object> meta =
+                                rec.metadata() != null
+                                        ? new LinkedHashMap<>(rec.metadata())
+                                        : new LinkedHashMap<>();
+                        if (vec != null && vec.length > 0) {
+                            meta.put("vector_dim", vec.length);
+                        }
+                        Document doc =
+                                Document.builder().id(id).text(rec.text()).metadata(meta).build();
+                        List<String> tokens = tokenize(doc.getText());
+                        Map<String, Integer> termFreq = new HashMap<>();
+                        for (String token : tokens) {
+                            termFreq.merge(token, 1, Integer::sum);
+                        }
+                        entries.put(id, new IndexedEntry(id, doc, termFreq, tokens.size(), vec));
+                    }
+                    log.info(
+                            "[HybridKnowledgeStore] 已从持久化文件 [{}] 恢复 {} 条知识切片（其中已向量化 {} 条）",
+                            persistencePath.toAbsolutePath(),
+                            entries.size(),
+                            vectorizedCount());
+                    if (backfilledAny) {
+                        saveToDisk();
+                    }
+                } catch (Exception ex) {
+                    log.warn(
+                            "[HybridKnowledgeStore] 读取持久化索引文件 [{}] 失败，将使用空索引启动: {}",
+                            persistencePath,
+                            ex.getMessage());
+                }
+            }
+        }
+
+        private void saveToDisk() {
+            if (persistencePath == null) {
+                return;
+            }
+            synchronized (persistLock) {
+                try {
+                    Path parent = persistencePath.toAbsolutePath().getParent();
+                    if (parent != null && !Files.exists(parent)) {
+                        Files.createDirectories(parent);
+                    }
+                    List<PersistedChunkRecord> snapshot =
+                            entries.values().stream()
+                                    .sorted(Comparator.comparing(IndexedEntry::id))
+                                    .map(e ->
+                                            new PersistedChunkRecord(
+                                                    e.id(),
+                                                    e.document().getText(),
+                                                    e.document().getMetadata(),
+                                                    e.vector()))
+                                    .toList();
+                    Path tmpFile =
+                            persistencePath.resolveSibling(
+                                    persistencePath.getFileName().toString() + ".tmp");
+                    PERSISTENCE_MAPPER
+                            .writerWithDefaultPrettyPrinter()
+                            .writeValue(tmpFile.toFile(), snapshot);
+                    Files.move(
+                            tmpFile,
+                            persistencePath,
+                            StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.ATOMIC_MOVE);
+                } catch (IOException ex) {
+                    log.warn(
+                            "[HybridKnowledgeStore] 持久化写入知识索引文件 [{}] 失败: {}",
+                            persistencePath,
+                            ex.getMessage());
+                }
+            }
+        }
     }
 
     private record IndexedEntry(
@@ -488,4 +700,7 @@ public class HybridKnowledgeStore {
             Map<String, Integer> termFreq,
             int docLength,
             float[] vector) {}
+
+    public record PersistedChunkRecord(
+            String id, String text, Map<String, Object> metadata, float[] vector) {}
 }

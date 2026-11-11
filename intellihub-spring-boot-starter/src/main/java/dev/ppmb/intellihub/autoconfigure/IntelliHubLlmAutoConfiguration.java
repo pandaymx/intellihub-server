@@ -1,14 +1,17 @@
 package dev.ppmb.intellihub.autoconfigure;
 
 import dev.ppmb.intellihub.autoconfigure.IntelliHubLlmProperties.ChannelProperties;
+import dev.ppmb.intellihub.autoconfigure.IntelliHubLlmProperties.EmbeddingProperties;
 import dev.ppmb.intellihub.autoconfigure.IntelliHubLlmProperties.RouteGroupProperties;
 import dev.ppmb.intellihub.autoconfigure.IntelliHubLlmProperties.RouteTargetProperties;
 import dev.ppmb.intellihub.core.advisor.AiLocalCacheAdvisor;
 import dev.ppmb.intellihub.core.advisor.AiLoggingAndMetricsAdvisor;
 import dev.ppmb.intellihub.llm.config.ModelConfig;
 import dev.ppmb.intellihub.llm.config.ModelProviderType;
+import dev.ppmb.intellihub.llm.embedding.GoogleGenAiEmbeddingModel;
 import dev.ppmb.intellihub.llm.factory.ChatModelFactory;
 import dev.ppmb.intellihub.llm.registry.IntelliHubModelRegistry;
+import dev.ppmb.intellihub.llm.router.ApiKeyPool;
 import dev.ppmb.intellihub.llm.router.ModelRouteTarget;
 import dev.ppmb.intellihub.llm.router.RoutingChatModel;
 import dev.ppmb.intellihub.llm.spi.ChatModelBuilderSpi;
@@ -20,10 +23,12 @@ import java.util.Map;
 import java.util.ServiceLoader;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -162,5 +167,60 @@ public class IntelliHubLlmAutoConfiguration {
         return ChatClient.builder(primaryChatModel)
                 .defaultAdvisors(loggingAdvisor, localCacheAdvisor)
                 .build();
+    }
+
+    /**
+     * 当开启 {@code intellihub.llm.embedding.enabled=true} 时，自动装配支持 KeyPool 故障转移与代理穿透的
+     * {@link GoogleGenAiEmbeddingModel}。
+     */
+    @Bean
+    @Primary
+    @ConditionalOnMissingBean(EmbeddingModel.class)
+    @ConditionalOnProperty(
+            prefix = "intellihub.llm.embedding",
+            name = "enabled",
+            havingValue = "true")
+    public EmbeddingModel intelliHubEmbeddingModel(IntelliHubLlmProperties properties) {
+        EmbeddingProperties embedProps = properties.getEmbedding();
+        ChannelProperties refChannel =
+                (embedProps.getChannel() != null && !embedProps.getChannel().isBlank())
+                        ? properties.getChannels().get(embedProps.getChannel().strip())
+                        : null;
+
+        List<String> resolvedKeys = new ArrayList<>();
+        if (embedProps.getApiKeys() != null && !embedProps.getApiKeys().isEmpty()) {
+            resolvedKeys.addAll(embedProps.getApiKeys());
+        } else if (embedProps.getApiKey() != null && !embedProps.getApiKey().isBlank()) {
+            resolvedKeys.add(embedProps.getApiKey().strip());
+        } else if (refChannel != null) {
+            if (refChannel.getApiKeys() != null && !refChannel.getApiKeys().isEmpty()) {
+                resolvedKeys.addAll(refChannel.getApiKeys());
+            } else if (refChannel.getApiKey() != null && !refChannel.getApiKey().isBlank()) {
+                resolvedKeys.add(refChannel.getApiKey().strip());
+            }
+        }
+
+        ModelConfig.Builder cfgBuilder =
+                (refChannel != null
+                                ? refChannel.toModelConfig().toBuilder()
+                                : ModelConfig.builder())
+                        .provider(
+                                embedProps.getProvider() != null
+                                        ? embedProps.getProvider()
+                                        : ModelProviderType.GOOGLE_GENAI.getCode())
+                        .model(embedProps.getModel());
+        if (!resolvedKeys.isEmpty()) {
+            cfgBuilder.apiKey(resolvedKeys.get(0));
+        }
+
+        ApiKeyPool keyPool =
+                new ApiKeyPool(
+                        ModelProviderType.GOOGLE_GENAI.getCode(),
+                        resolvedKeys,
+                        refChannel != null
+                                ? refChannel.getKeyCooldown()
+                                : ApiKeyPool.DEFAULT_COOLDOWN);
+        return new GoogleGenAiEmbeddingModel(
+                cfgBuilder.build(), keyPool, embedProps.getDimensions());
     }
 }

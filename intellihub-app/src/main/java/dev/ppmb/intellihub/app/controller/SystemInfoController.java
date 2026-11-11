@@ -50,6 +50,11 @@ public class SystemInfoController {
         response.setRegisteredTools(new ArrayList<>(toolRegistry.getRegisteredToolNames()));
         response.setPromptTemplateIds(new ArrayList<>(promptRegistry.listIds()));
         response.setKnowledgeBaseChunkCount(knowledgeStore.size());
+        response.setVectorizedChunkCount(knowledgeStore.getVectorizedCount());
+        response.setEmbeddingEnabled(knowledgeStore.isVectorAvailable());
+        response.setEmbeddingDimensions(knowledgeStore.getVectorDimensions());
+        response.setKnowledgeStorePersistent(knowledgeStore.isPersistent());
+        response.setPersistencePath(knowledgeStore.getPersistencePath());
         return ApiResponse.success(response);
     }
 }

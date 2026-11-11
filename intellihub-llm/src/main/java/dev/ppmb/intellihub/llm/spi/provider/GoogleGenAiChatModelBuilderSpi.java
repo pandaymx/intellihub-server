@@ -120,7 +120,7 @@ public class GoogleGenAiChatModelBuilderSpi implements ChatModelBuilderSpi {
         return chatModel;
     }
 
-    static Optional<ProxyOptions> resolveProxyOptions(ModelConfig config) {
+    public static Optional<ProxyOptions> resolveProxyOptions(ModelConfig config) {
         String rawProxy =
                 config.getExtraString(EXTRA_PROXY_URL)
                         .orElseGet(GoogleGenAiChatModelBuilderSpi::resolveEnvProxyUrl);

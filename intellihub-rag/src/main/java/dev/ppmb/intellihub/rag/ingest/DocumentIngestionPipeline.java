@@ -112,6 +112,20 @@ public class DocumentIngestionPipeline {
         ingestedContentHashes.clear();
     }
 
+    /**
+     * 将持久化存储中已存在的文档切片指纹同步注册至去重表（用于服务重启后恢复幂等状态）。
+     */
+    public void registerExistingDocuments(java.util.Collection<Document> existingDocuments) {
+        if (existingDocuments == null || existingDocuments.isEmpty()) {
+            return;
+        }
+        for (Document chunk : existingDocuments) {
+            if (chunk != null) {
+                ingestedContentHashes.add(resolveDeduplicationKey(chunk));
+            }
+        }
+    }
+
     private static String resolveDeduplicationKey(Document chunk) {
         Map<String, Object> meta = chunk.getMetadata();
         Object tenant = meta.getOrDefault(META_TENANT_ID, "default");

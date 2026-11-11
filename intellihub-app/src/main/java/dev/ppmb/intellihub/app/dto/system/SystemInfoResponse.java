@@ -17,6 +17,11 @@ public class SystemInfoResponse {
     private List<String> registeredTools;
     private List<String> promptTemplateIds;
     private int knowledgeBaseChunkCount;
+    private int vectorizedChunkCount;
+    private boolean embeddingEnabled;
+    private int embeddingDimensions;
+    private boolean knowledgeStorePersistent;
+    private String persistencePath;
 
     public SystemInfoResponse() {}
 
@@ -90,5 +95,45 @@ public class SystemInfoResponse {
 
     public void setKnowledgeBaseChunkCount(int knowledgeBaseChunkCount) {
         this.knowledgeBaseChunkCount = knowledgeBaseChunkCount;
+    }
+
+    public int getVectorizedChunkCount() {
+        return vectorizedChunkCount;
+    }
+
+    public void setVectorizedChunkCount(int vectorizedChunkCount) {
+        this.vectorizedChunkCount = vectorizedChunkCount;
+    }
+
+    public boolean isEmbeddingEnabled() {
+        return embeddingEnabled;
+    }
+
+    public void setEmbeddingEnabled(boolean embeddingEnabled) {
+        this.embeddingEnabled = embeddingEnabled;
+    }
+
+    public int getEmbeddingDimensions() {
+        return embeddingDimensions;
+    }
+
+    public void setEmbeddingDimensions(int embeddingDimensions) {
+        this.embeddingDimensions = embeddingDimensions;
+    }
+
+    public boolean isKnowledgeStorePersistent() {
+        return knowledgeStorePersistent;
+    }
+
+    public void setKnowledgeStorePersistent(boolean knowledgeStorePersistent) {
+        this.knowledgeStorePersistent = knowledgeStorePersistent;
+    }
+
+    public String getPersistencePath() {
+        return persistencePath;
+    }
+
+    public void setPersistencePath(String persistencePath) {
+        this.persistencePath = persistencePath;
     }
 }
