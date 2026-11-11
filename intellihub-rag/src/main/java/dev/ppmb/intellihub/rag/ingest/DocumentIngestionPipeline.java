@@ -1,6 +1,8 @@
 package dev.ppmb.intellihub.rag.ingest;
 
 import dev.ppmb.intellihub.core.exception.IntelliHubExceptionUtil;
+import dev.ppmb.intellihub.rag.parser.MultiFormatDocumentParserRegistry;
+import dev.ppmb.intellihub.rag.parser.ParsedDocument;
 import dev.ppmb.intellihub.rag.splitter.SemanticMarkdownDocumentSplitter;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -34,14 +36,63 @@ public class DocumentIngestionPipeline {
     public static final String META_INGESTED_AT = "ingested_at";
 
     private final DocumentTransformer splitter;
+    private final MultiFormatDocumentParserRegistry parserRegistry;
     private final Set<String> ingestedContentHashes = ConcurrentHashMap.newKeySet();
 
     public DocumentIngestionPipeline() {
-        this(new SemanticMarkdownDocumentSplitter());
+        this(new SemanticMarkdownDocumentSplitter(), new MultiFormatDocumentParserRegistry());
     }
 
     public DocumentIngestionPipeline(DocumentTransformer splitter) {
+        this(splitter, new MultiFormatDocumentParserRegistry());
+    }
+
+    public DocumentIngestionPipeline(
+            DocumentTransformer splitter, MultiFormatDocumentParserRegistry parserRegistry) {
         this.splitter = Objects.requireNonNull(splitter, "splitter 不能为空");
+        this.parserRegistry =
+                parserRegistry != null ? parserRegistry : new MultiFormatDocumentParserRegistry();
+    }
+
+    public MultiFormatDocumentParserRegistry getParserRegistry() {
+        return parserRegistry;
+    }
+
+    /**
+     * 解析任意受支持格式的原始文件（PDF / DOCX / XLSX / PPTX / CSV / HTML / JSON / YAML / 源码 / Markdown / TXT）。
+     */
+    public ParsedDocument parseFile(String fileName, String contentType, byte[] contentBytes) {
+        return parserRegistry.parse(fileName, contentType, contentBytes);
+    }
+
+    /**
+     * 一站式解析多格式文件并切分、去重后写入目标知识库接收器。
+     */
+    public FileIngestionResult ingestFile(
+            String fileName,
+            String contentType,
+            byte[] contentBytes,
+            Map<String, Object> commonMetadata,
+            Consumer<List<Document>> sink) {
+        if (sink == null) {
+            throw IntelliHubExceptionUtil.invalidParamException("文档写入接收器 sink 不能为空");
+        }
+        ParsedDocument parsed = parserRegistry.parse(fileName, contentType, contentBytes);
+        Map<String, Object> safeMeta =
+                commonMetadata != null
+                        ? new LinkedHashMap<>(commonMetadata)
+                        : new LinkedHashMap<>();
+        if (!safeMeta.containsKey("title")
+                || safeMeta.get("title") == null
+                || safeMeta.get("title").toString().isBlank()) {
+            safeMeta.put("title", parsed.title());
+        }
+        Document rawDoc = parsed.toSpringAiDocument(safeMeta);
+        List<Document> chunks = process(List.of(rawDoc), safeMeta);
+        if (!chunks.isEmpty()) {
+            sink.accept(chunks);
+        }
+        return new FileIngestionResult(parsed, chunks);
     }
 
     /**
@@ -140,4 +191,6 @@ public class DocumentIngestionPipeline {
     }
 
     public record IngestionResult(int sourceDocumentCount, int ingestedChunkCount) {}
+
+    public record FileIngestionResult(ParsedDocument parsedDocument, List<Document> chunks) {}
 }

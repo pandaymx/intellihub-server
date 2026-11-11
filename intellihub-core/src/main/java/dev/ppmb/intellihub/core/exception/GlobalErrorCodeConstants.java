@@ -40,4 +40,8 @@ public final class GlobalErrorCodeConstants {
             new ErrorCode(1_001_000_006, "内容触发安全护栏拦截: {}");
     public static final ErrorCode AI_TOOL_EXECUTION_ERROR =
             new ErrorCode(1_001_000_007, "AI 工具调用执行异常: {}");
+    public static final ErrorCode AI_DOCUMENT_PARSE_ERROR =
+            new ErrorCode(1_001_000_008, "文档解析失败: {}");
+    public static final ErrorCode AI_UNSUPPORTED_FILE_FORMAT =
+            new ErrorCode(1_001_000_009, "不支持的文件格式: {}");
 }

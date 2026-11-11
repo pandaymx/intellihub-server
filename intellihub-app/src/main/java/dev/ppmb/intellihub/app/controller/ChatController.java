@@ -143,6 +143,10 @@ public class ChatController {
                         .append("\n");
             }
             extractPromptText.append("\n【输入文本】\n").append(userMsg);
+            String attachmentsBlock = formatAttachmentsBlock(request.getAttachments());
+            if (!attachmentsBlock.isEmpty()) {
+                extractPromptText.append("\n\n").append(attachmentsBlock);
+            }
 
             Map<String, Object> extracted =
                     structuredOutputExecutor.execute(
@@ -183,7 +187,8 @@ public class ChatController {
             }
         }
 
-        String enrichedUserPrompt = buildEnrichedUserMessage(userMsg, ragCitations);
+        String enrichedUserPrompt =
+                buildEnrichedUserMessage(userMsg, ragCitations, request.getAttachments());
         messages.add(new UserMessage(enrichedUserPrompt));
 
         // 5. 默认使用 ReAct 智能体引擎执行（自动按需调用工具或直接回答，并支持高风险工具挂起审批）
@@ -264,30 +269,68 @@ public class ChatController {
         return "你是 IntelliHub 企业级智能助手。你可以在同一对话窗口中协助用户解答架构规范问题、调用工具查询时间或计算税费、执行带人工审批的敏感操作，并在引用知识库时标注 [#1] 角标。";
     }
 
-    private String buildEnrichedUserMessage(String userMsg, List<ScoredDocument> citations) {
-        if (citations == null || citations.isEmpty()) {
+    private String buildEnrichedUserMessage(
+            String userMsg,
+            List<ScoredDocument> citations,
+            List<UnifiedChatTurnRequest.AttachedDocumentContext> attachments) {
+        String attachmentsBlock = formatAttachmentsBlock(attachments);
+        if ((citations == null || citations.isEmpty()) && attachmentsBlock.isEmpty()) {
             return userMsg;
         }
         StringBuilder sb = new StringBuilder();
-        sb.append("【参考知识库切片】\n");
-        int idx = 1;
-        for (ScoredDocument doc : citations) {
-            String text = doc.document().getText() != null ? doc.document().getText().strip() : "";
-            if (text.isEmpty()) {
-                continue;
+        if (citations != null && !citations.isEmpty()) {
+            sb.append("【参考知识库切片】\n");
+            int idx = 1;
+            for (ScoredDocument doc : citations) {
+                String text =
+                        doc.document().getText() != null ? doc.document().getText().strip() : "";
+                if (text.isEmpty()) {
+                    continue;
+                }
+                Object section = doc.document().getMetadata().getOrDefault("section_path", "知识分片");
+                sb.append("[#")
+                        .append(idx)
+                        .append(" | section=")
+                        .append(section)
+                        .append("]\n")
+                        .append(text)
+                        .append("\n\n");
+                idx++;
             }
-            Object section = doc.document().getMetadata().getOrDefault("section_path", "知识分片");
-            sb.append("[#")
-                    .append(idx)
-                    .append(" | section=")
-                    .append(section)
-                    .append("]\n")
-                    .append(text)
-                    .append("\n\n");
-            idx++;
+        }
+        if (!attachmentsBlock.isEmpty()) {
+            sb.append(attachmentsBlock).append("\n\n");
         }
         sb.append("【用户问题】\n").append(userMsg);
         return sb.toString();
+    }
+
+    private String formatAttachmentsBlock(
+            List<UnifiedChatTurnRequest.AttachedDocumentContext> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("【当前对话上传的附件解析内容】\n");
+        for (UnifiedChatTurnRequest.AttachedDocumentContext att : attachments) {
+            if (att == null || att.content() == null || att.content().isBlank()) {
+                continue;
+            }
+            String name = att.fileName() != null ? att.fileName() : "unnamed";
+            String fmt = att.fileFormat() != null ? att.fileFormat() : "TEXT";
+            String truncated =
+                    att.content().length() > 16000
+                            ? att.content().substring(0, 16000) + "\n...(内容过长已截断)..."
+                            : att.content();
+            sb.append("<attached_document name=\"")
+                    .append(name)
+                    .append("\" format=\"")
+                    .append(fmt)
+                    .append("\">\n")
+                    .append(truncated.strip())
+                    .append("\n</attached_document>\n\n");
+        }
+        return sb.toString().strip();
     }
 
     /**

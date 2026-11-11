@@ -417,4 +417,117 @@ class RagModuleTest {
                                 new float[] {0.25f, -0.5f, 1.0f}))
                 .isEqualTo("[0.25,-0.5,1.0]");
     }
+
+    @Test
+    void shouldParseAndIngestMultiFormatDocumentsIntoStructuredMarkdown() throws Exception {
+        DocumentIngestionPipeline pipeline = new DocumentIngestionPipeline();
+        HybridKnowledgeStore store = new HybridKnowledgeStore();
+
+        // 1. PDF 解析验证（生成 2 页真实 PDF 字节流）
+        byte[] pdfBytes;
+        try (org.apache.pdfbox.pdmodel.PDDocument pdf = new org.apache.pdfbox.pdmodel.PDDocument();
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
+            org.apache.pdfbox.pdmodel.PDPage page1 = new org.apache.pdfbox.pdmodel.PDPage();
+            pdf.addPage(page1);
+            try (org.apache.pdfbox.pdmodel.PDPageContentStream cs =
+                    new org.apache.pdfbox.pdmodel.PDPageContentStream(pdf, page1)) {
+                cs.beginText();
+                cs.setFont(
+                        new org.apache.pdfbox.pdmodel.font.PDType1Font(
+                                org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA),
+                        12);
+                cs.newLineAtOffset(50, 700);
+                cs.showText("IntelliHub Enterprise SLA Guide Page 1");
+                cs.endText();
+            }
+            org.apache.pdfbox.pdmodel.PDPage page2 = new org.apache.pdfbox.pdmodel.PDPage();
+            pdf.addPage(page2);
+            try (org.apache.pdfbox.pdmodel.PDPageContentStream cs =
+                    new org.apache.pdfbox.pdmodel.PDPageContentStream(pdf, page2)) {
+                cs.beginText();
+                cs.setFont(
+                        new org.apache.pdfbox.pdmodel.font.PDType1Font(
+                                org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA),
+                        12);
+                cs.newLineAtOffset(50, 700);
+                cs.showText("Refund Policy and Approval Workflow Page 2");
+                cs.endText();
+            }
+            pdf.save(bos);
+            pdfBytes = bos.toByteArray();
+        }
+
+        var pdfResult =
+                pipeline.ingestFile(
+                        "sla-manual.pdf",
+                        "application/pdf",
+                        pdfBytes,
+                        Map.of("tenant_id", "default"),
+                        store::addAll);
+        assertThat(pdfResult.parsedDocument().fileFormat()).isEqualTo("PDF");
+        assertThat(pdfResult.parsedDocument().metadata().get("page_count")).isEqualTo(2);
+        assertThat(pdfResult.parsedDocument().markdownContent())
+                .contains("## Page 1")
+                .contains("## Page 2")
+                .contains("Refund Policy and Approval Workflow Page 2");
+        assertThat(pdfResult.chunks()).isNotEmpty();
+
+        // 2. CSV 表格解析验证
+        String csvContent = "订单号,客户姓名,退款金额,审批状态\nORD-001,张三,199.00,自动通过\nORD-002,李四,899.00,人工复核\n";
+        var csvParsed =
+                pipeline.parseFile(
+                        "orders.csv",
+                        "text/csv",
+                        csvContent.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(csvParsed.fileFormat()).isEqualTo("CSV");
+        assertThat(csvParsed.markdownContent())
+                .contains("| 订单号 | 客户姓名 | 退款金额 | 审批状态 |")
+                .contains("| ORD-002 | 李四 | 899.00 | 人工复核 |");
+
+        // 3. Word (.docx) 压缩包解析验证（含标题样式与表格）
+        byte[] docxBytes;
+        try (java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(bos)) {
+            zos.putNextEntry(new java.util.zip.ZipEntry("word/document.xml"));
+            String docXml =
+                    """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                      <w:body>
+                        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>架构设计总览</w:t></w:r></w:p>
+                        <w:p><w:r><w:t>本系统采用多模型高可用路由架构。</w:t></w:r></w:p>
+                        <w:tbl>
+                          <w:tr><w:tc><w:p><w:r><w:t>模块</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>职责</w:t></w:r></w:p></w:tc></w:tr>
+                          <w:tr><w:tc><w:p><w:r><w:t>intellihub-rag</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>多格式解析与混合检索</w:t></w:r></w:p></w:tc></w:tr>
+                        </w:tbl>
+                      </w:body>
+                    </w:document>
+                    """;
+            zos.write(docXml.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zos.closeEntry();
+            zos.finish();
+            docxBytes = bos.toByteArray();
+        }
+        var docxParsed =
+                pipeline.parseFile(
+                        "arch-spec.docx",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        docxBytes);
+        assertThat(docxParsed.fileFormat()).isEqualTo("DOCX");
+        assertThat(docxParsed.markdownContent())
+                .contains("# 架构设计总览")
+                .contains("| 模块 | 职责 |")
+                .contains("| intellihub-rag | 多格式解析与混合检索 |");
+
+        // 4. HTML 与 JSON 解析验证
+        String html =
+                "<html><head><title>API 手册</title><script>alert(1)</script></head><body><h2>鉴权说明</h2><p>请在 Header 携带 Bearer Token。</p></body></html>";
+        var htmlParsed =
+                pipeline.parseFile(
+                        "api.html",
+                        "text/html",
+                        html.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(htmlParsed.title()).isEqualTo("API 手册");
+        assertThat(htmlParsed.markdownContent()).contains("## 鉴权说明").doesNotContain("alert(1)");
+    }
 }

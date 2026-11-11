@@ -37,6 +37,9 @@ public class UnifiedChatTurnRequest {
     /** 可选采样温度 */
     private Double temperature;
 
+    /** 当前对话回合附带的已解析多格式文件上下文列表 */
+    private List<AttachedDocumentContext> attachments;
+
     public UnifiedChatTurnRequest() {}
 
     public String getMessage() {
@@ -119,5 +122,15 @@ public class UnifiedChatTurnRequest {
         this.temperature = temperature;
     }
 
+    public List<AttachedDocumentContext> getAttachments() {
+        return attachments;
+    }
+
+    public void setAttachments(List<AttachedDocumentContext> attachments) {
+        this.attachments = attachments;
+    }
+
     public record HistoryMessage(String role, String content) {}
+
+    public record AttachedDocumentContext(String fileName, String fileFormat, String content) {}
 }

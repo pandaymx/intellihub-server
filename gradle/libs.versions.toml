@@ -23,6 +23,8 @@ springAiGoogleGenai = { module = "org.springframework.ai:spring-ai-google-genai"
 springAiOllama = { module = "org.springframework.ai:spring-ai-ollama" }
 springAiMistralAi = { module = "org.springframework.ai:spring-ai-mistral-ai" }
 springAiBedrockConverse = { module = "org.springframework.ai:spring-ai-bedrock-converse" }
+springAiPdfDocumentReader = { module = "org.springframework.ai:spring-ai-pdf-document-reader" }
+pdfbox = { module = "org.apache.pdfbox:pdfbox", version = "3.0.4" }
 jinferSpringAi = { module = "com.qxotic:jinfer-spring-ai" }
 jinferModelsAll = { module = "com.qxotic:jinfer-models-all" }
 caffeine = { module = "com.github.ben-manes.caffeine:caffeine" }

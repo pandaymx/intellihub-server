@@ -1,7 +1,9 @@
 package dev.ppmb.intellihub.app.controller;
 
 import dev.ppmb.intellihub.app.common.ApiResponse;
+import dev.ppmb.intellihub.app.dto.rag.BatchFileIngestResponse;
 import dev.ppmb.intellihub.app.dto.rag.DocumentIngestRequest;
+import dev.ppmb.intellihub.app.dto.rag.FileParseResultDto;
 import dev.ppmb.intellihub.app.dto.rag.IngestResultResponse;
 import dev.ppmb.intellihub.app.dto.rag.RagQueryApiRequest;
 import dev.ppmb.intellihub.app.dto.rag.RagQueryApiResponse;
@@ -13,21 +15,27 @@ import dev.ppmb.intellihub.llm.registry.IntelliHubModelRegistry;
 import dev.ppmb.intellihub.rag.engine.RagAnswer;
 import dev.ppmb.intellihub.rag.engine.RagQueryEngine;
 import dev.ppmb.intellihub.rag.ingest.DocumentIngestionPipeline;
+import dev.ppmb.intellihub.rag.parser.ParsedDocument;
 import dev.ppmb.intellihub.rag.retrieval.RagSearchRequest;
 import dev.ppmb.intellihub.rag.retrieval.ScoredDocument;
 import dev.ppmb.intellihub.rag.store.HybridKnowledgeStore;
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * RAG 知识库管理、语义切分入库、多模态混合检索与增强问答 REST 控制器。
@@ -83,6 +91,116 @@ public class RagController {
 
         List<String> chunkIds = chunks.stream().map(Document::getId).toList();
         return ApiResponse.success(new IngestResultResponse(chunks.size(), chunkIds));
+    }
+
+    /**
+     * 查询当前受支持的多格式文件解析扩展名列表。
+     */
+    @GetMapping("/supported-formats")
+    public ApiResponse<List<String>> getSupportedFormats() {
+        return ApiResponse.success(ingestionPipeline.getParserRegistry().getSupportedExtensions());
+    }
+
+    /**
+     * 多格式文件仅解析预览接口（Multipart 上传：支持 PDF、Word(.docx)、Excel(.xlsx)、PPT(.pptx)、CSV/TSV、HTML、JSON/YAML、源码与
+     * Markdown/TXT，将其转化为结构化 Markdown 返回，不直接写入知识库）。
+     */
+    @PostMapping(value = "/documents/parse", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<List<FileParseResultDto>> parseUploadedFiles(
+            @RequestParam(value = "files", required = false) List<MultipartFile> files,
+            @RequestParam(value = "file", required = false) MultipartFile singleFile) {
+        List<MultipartFile> resolvedFiles = collectMultipartFiles(files, singleFile);
+        List<FileParseResultDto> results = new ArrayList<>(resolvedFiles.size());
+        for (MultipartFile mf : resolvedFiles) {
+            byte[] bytes = readMultipartBytes(mf);
+            String fileName =
+                    mf.getOriginalFilename() != null ? mf.getOriginalFilename() : mf.getName();
+            ParsedDocument parsed =
+                    ingestionPipeline.parseFile(fileName, mf.getContentType(), bytes);
+            results.add(FileParseResultDto.fromParsed(parsed, 0, List.of()));
+        }
+        return ApiResponse.success(results);
+    }
+
+    /**
+     * 多格式文件批量上传、自动解析、语义切分与向量化入库一站式接口（Multipart 上传）。
+     */
+    @PostMapping(value = "/documents/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<BatchFileIngestResponse> uploadAndIngestFiles(
+            @RequestParam(value = "files", required = false) List<MultipartFile> files,
+            @RequestParam(value = "file", required = false) MultipartFile singleFile,
+            @RequestParam(value = "title", required = false) String customTitle,
+            @RequestParam(value = "tenantId", required = false) String tenantId,
+            @RequestParam(value = "kbId", required = false) String kbId) {
+        List<MultipartFile> resolvedFiles = collectMultipartFiles(files, singleFile);
+
+        Map<String, Object> baseMeta = new LinkedHashMap<>();
+        if (tenantId != null && !tenantId.isBlank()) {
+            baseMeta.put(DocumentIngestionPipeline.META_TENANT_ID, tenantId.strip());
+        } else {
+            baseMeta.put(DocumentIngestionPipeline.META_TENANT_ID, "default");
+        }
+        if (kbId != null && !kbId.isBlank()) {
+            baseMeta.put(DocumentIngestionPipeline.META_KB_ID, kbId.strip());
+        } else {
+            baseMeta.put(DocumentIngestionPipeline.META_KB_ID, "builtin");
+        }
+
+        List<FileParseResultDto> fileResults = new ArrayList<>(resolvedFiles.size());
+        List<String> allChunkIds = new ArrayList<>();
+
+        for (MultipartFile mf : resolvedFiles) {
+            byte[] bytes = readMultipartBytes(mf);
+            String fileName =
+                    mf.getOriginalFilename() != null ? mf.getOriginalFilename() : mf.getName();
+            Map<String, Object> fileMeta = new LinkedHashMap<>(baseMeta);
+            if (resolvedFiles.size() == 1 && customTitle != null && !customTitle.isBlank()) {
+                fileMeta.put("title", customTitle.strip());
+            }
+
+            DocumentIngestionPipeline.FileIngestionResult ingestResult =
+                    ingestionPipeline.ingestFile(
+                            fileName, mf.getContentType(), bytes, fileMeta, knowledgeStore::addAll);
+
+            List<String> chunkIds = ingestResult.chunks().stream().map(Document::getId).toList();
+            allChunkIds.addAll(chunkIds);
+            fileResults.add(
+                    FileParseResultDto.fromParsed(
+                            ingestResult.parsedDocument(), chunkIds.size(), chunkIds));
+        }
+
+        return ApiResponse.success(
+                new BatchFileIngestResponse(
+                        fileResults.size(), allChunkIds.size(), allChunkIds, fileResults));
+    }
+
+    private static List<MultipartFile> collectMultipartFiles(
+            List<MultipartFile> files, MultipartFile singleFile) {
+        List<MultipartFile> list = new ArrayList<>();
+        if (files != null) {
+            for (MultipartFile f : files) {
+                if (f != null && !f.isEmpty()) {
+                    list.add(f);
+                }
+            }
+        }
+        if (singleFile != null && !singleFile.isEmpty() && !list.contains(singleFile)) {
+            list.add(singleFile);
+        }
+        if (list.isEmpty()) {
+            throw IntelliHubExceptionUtil.invalidParamException("请至少选择一个非空文件进行上传");
+        }
+        return list;
+    }
+
+    private static byte[] readMultipartBytes(MultipartFile file) {
+        try {
+            return file.getBytes();
+        } catch (IOException e) {
+            throw IntelliHubExceptionUtil.exception(
+                    GlobalErrorCodeConstants.AI_DOCUMENT_PARSE_ERROR,
+                    "读取上传文件字节流失败: " + e.getMessage());
+        }
     }
 
     /**
@@ -224,6 +342,8 @@ public class RagController {
                 knowledgeStore.getPersistencePath() != null
                         ? knowledgeStore.getPersistencePath()
                         : "");
+        stats.put(
+                "supportedFormats", ingestionPipeline.getParserRegistry().getSupportedExtensions());
         return ApiResponse.success(stats);
     }
 }

@@ -6,6 +6,10 @@ server:
 spring:
   application:
     name: intellihub-server
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 100MB
   config:
     import: optional:classpath:application-local.yml,optional:file:./application-local.yml
   ai:

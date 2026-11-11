@@ -3,6 +3,7 @@ package dev.ppmb.intellihub.autoconfigure;
 import dev.ppmb.intellihub.prompt.render.SafePromptRenderer;
 import dev.ppmb.intellihub.rag.engine.RagQueryEngine;
 import dev.ppmb.intellihub.rag.ingest.DocumentIngestionPipeline;
+import dev.ppmb.intellihub.rag.parser.MultiFormatDocumentParserRegistry;
 import dev.ppmb.intellihub.rag.rerank.DocumentReranker;
 import dev.ppmb.intellihub.rag.rerank.KeywordOverlapReranker;
 import dev.ppmb.intellihub.rag.splitter.SemanticMarkdownDocumentSplitter;
@@ -46,9 +47,16 @@ public class IntelliHubRagAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public MultiFormatDocumentParserRegistry intelliHubDocumentParserRegistry() {
+        return new MultiFormatDocumentParserRegistry();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public DocumentIngestionPipeline intelliHubDocumentIngestionPipeline(
-            SemanticMarkdownDocumentSplitter splitter) {
-        return new DocumentIngestionPipeline(splitter);
+            SemanticMarkdownDocumentSplitter splitter,
+            MultiFormatDocumentParserRegistry parserRegistry) {
+        return new DocumentIngestionPipeline(splitter, parserRegistry);
     }
 
     @Bean
