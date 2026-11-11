@@ -9,7 +9,9 @@ import dev.ppmb.intellihub.rag.splitter.SemanticMarkdownDocumentSplitter;
 import dev.ppmb.intellihub.rag.store.HybridKnowledgeStore;
 import dev.ppmb.intellihub.rag.store.LexicalSearchBackend;
 import dev.ppmb.intellihub.rag.store.VectorSearchBackend;
+import dev.ppmb.intellihub.rag.store.pg.PgHybridSearchBackend;
 import java.nio.file.Path;
+import javax.sql.DataSource;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -55,12 +57,35 @@ public class IntelliHubRagAutoConfiguration {
             ObjectProvider<VectorSearchBackend> vectorBackendProvider,
             ObjectProvider<LexicalSearchBackend> lexicalBackendProvider,
             ObjectProvider<EmbeddingModel> embeddingModelProvider,
+            ObjectProvider<DataSource> dataSourceProvider,
             DocumentIngestionPipeline ingestionPipeline,
+            @Value("${intellihub.rag.pgvector.enabled:false}") boolean pgvectorEnabled,
+            @Value(
+                            "${intellihub.rag.pgvector.table-name:"
+                                    + PgHybridSearchBackend.DEFAULT_TABLE_NAME
+                                    + "}")
+                    String pgTableName,
+            @Value(
+                            "${intellihub.rag.pgvector.dimensions:"
+                                    + PgHybridSearchBackend.DEFAULT_DIMENSIONS
+                                    + "}")
+                    int pgDimensions,
             @Value("${intellihub.rag.storage-path:}") String storagePath) {
         VectorSearchBackend vectorBackend = vectorBackendProvider.getIfUnique();
         LexicalSearchBackend lexicalBackend = lexicalBackendProvider.getIfUnique();
         if (vectorBackend != null && lexicalBackend != null) {
             return new HybridKnowledgeStore(vectorBackend, lexicalBackend);
+        }
+        DataSource dataSource = dataSourceProvider.getIfAvailable();
+        if (pgvectorEnabled && dataSource != null) {
+            PgHybridSearchBackend pgBackend =
+                    new PgHybridSearchBackend(
+                            dataSource,
+                            embeddingModelProvider.getIfUnique(),
+                            pgTableName,
+                            pgDimensions,
+                            true);
+            return new HybridKnowledgeStore(pgBackend, pgBackend);
         }
         Path persistencePath =
                 (storagePath != null && !storagePath.isBlank())

@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import dev.ppmb.intellihub.agent.checkpoint.AgentCheckpointStore;
+import dev.ppmb.intellihub.agent.checkpoint.InMemoryAgentCheckpointStore;
 import dev.ppmb.intellihub.agent.tool.GovernedToolRegistry;
 import dev.ppmb.intellihub.core.clean.AiOutputUtil;
 import dev.ppmb.intellihub.core.exception.GlobalErrorCodeConstants;
@@ -23,7 +25,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -65,19 +66,37 @@ public class ReActAgentExecutor {
     private final GovernedToolRegistry toolRegistry;
     private final SafePromptRenderer promptRenderer;
     private final AgentExecutionBudget defaultBudget;
-    private final Map<String, AgentCheckpoint> checkpointStore = new ConcurrentHashMap<>();
+    private final AgentCheckpointStore checkpointStore;
 
     public ReActAgentExecutor(GovernedToolRegistry toolRegistry) {
-        this(toolRegistry, new SafePromptRenderer(), AgentExecutionBudget.defaults());
+        this(
+                toolRegistry,
+                new SafePromptRenderer(),
+                AgentExecutionBudget.defaults(),
+                new InMemoryAgentCheckpointStore());
     }
 
     public ReActAgentExecutor(
             GovernedToolRegistry toolRegistry,
             SafePromptRenderer promptRenderer,
             AgentExecutionBudget defaultBudget) {
+        this(toolRegistry, promptRenderer, defaultBudget, new InMemoryAgentCheckpointStore());
+    }
+
+    public ReActAgentExecutor(
+            GovernedToolRegistry toolRegistry,
+            SafePromptRenderer promptRenderer,
+            AgentExecutionBudget defaultBudget,
+            AgentCheckpointStore checkpointStore) {
         this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry 不能为空");
         this.promptRenderer = Objects.requireNonNull(promptRenderer, "promptRenderer 不能为空");
         this.defaultBudget = Objects.requireNonNull(defaultBudget, "defaultBudget 不能为空");
+        this.checkpointStore =
+                checkpointStore != null ? checkpointStore : new InMemoryAgentCheckpointStore();
+    }
+
+    public AgentCheckpointStore getCheckpointStore() {
+        return checkpointStore;
     }
 
     /**
@@ -160,7 +179,7 @@ public class ReActAgentExecutor {
         if (checkpointId == null || checkpointId.isBlank()) {
             throw IntelliHubExceptionUtil.invalidParamException("checkpointId 不能为空");
         }
-        AgentCheckpoint cp = checkpointStore.remove(checkpointId.strip());
+        AgentCheckpoint cp = checkpointStore.remove(checkpointId.strip()).orElse(null);
         if (cp == null) {
             throw IntelliHubExceptionUtil.exception(
                     GlobalErrorCodeConstants.NOT_FOUND, "AgentCheckpoint [" + checkpointId + "]");
@@ -261,7 +280,7 @@ public class ReActAgentExecutor {
         if (checkpointId == null || checkpointId.isBlank()) {
             return Optional.empty();
         }
-        return Optional.ofNullable(checkpointStore.get(checkpointId.strip()));
+        return checkpointStore.findById(checkpointId.strip());
     }
 
     private AgentRunResult executeLoop(
@@ -434,7 +453,7 @@ public class ReActAgentExecutor {
                                     callFingerprintCounts,
                                     totalToolCalls,
                                     totalTokens);
-                    checkpointStore.put(checkpointId, checkpoint);
+                    checkpointStore.save(checkpoint);
                     long totalCost = System.currentTimeMillis() - startWallMs;
                     return new AgentRunResult(
                             outcome.observation(),

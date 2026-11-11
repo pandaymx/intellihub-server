@@ -23,6 +23,14 @@ spring:
 intellihub:
   rag:
     storage-path: ${INTELLIHUB_RAG_STORAGE_PATH:.intellihub-data/knowledge-store.json}
+    pgvector:
+      enabled: ${INTELLIHUB_PGVECTOR_ENABLED:false}
+      table-name: intellihub_kb_chunks
+      dimensions: 768
+  agent:
+    jdbc-store-enabled: ${INTELLIHUB_AGENT_JDBC_ENABLED:false}
+    checkpoint-path: ${INTELLIHUB_AGENT_CHECKPOINT_PATH:.intellihub-data/agent-checkpoints.json}
+    session-memory-path: ${INTELLIHUB_AGENT_SESSION_MEMORY_PATH:.intellihub-data/session-memory.json}
   chat:
     sessions-path: ${INTELLIHUB_CHAT_SESSIONS_PATH:.intellihub-data/chat-sessions.json}
   llm:

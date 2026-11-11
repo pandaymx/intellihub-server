@@ -360,4 +360,104 @@ class AgentModuleTest {
         assertThat(tokenResult.totalTokens()).isEqualTo(1200L);
         assertThat(tokenResult.output()).isEqualTo("Synthesized after token budget limit.");
     }
+
+    @Test
+    void shouldPersistAgentCheckpointAndSessionMemoryAcrossProcessRestart(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) {
+        java.nio.file.Path cpFile = tempDir.resolve("checkpoints.json");
+        java.nio.file.Path memFile = tempDir.resolve("sessions.json");
+
+        OrderFinanceTools tools = new OrderFinanceTools();
+        GovernedToolRegistry registry =
+                new GovernedToolRegistry()
+                        .registerToolObjects(tools)
+                        .markHighRisk("delete_production_db")
+                        .setApprovalHandler((toolName, rawArgs, context) ->
+                                ToolApprovalHandler.ApprovalDecision.awaitHumanApproval(
+                                        "ticket-persist-01", "Requires approval"));
+
+        // 1. 进程 1：触发高风险工具挂起，将 Checkpoint 落盘保存至 cpFile
+        dev.ppmb.intellihub.agent.checkpoint.FileAgentCheckpointStore store1 =
+                new dev.ppmb.intellihub.agent.checkpoint.FileAgentCheckpointStore(cpFile);
+        ReActAgentExecutor executorProcess1 =
+                new ReActAgentExecutor(
+                        registry,
+                        new dev.ppmb.intellihub.prompt.render.SafePromptRenderer(),
+                        AgentExecutionBudget.defaults(),
+                        store1);
+
+        ChatModel checkpointModel =
+                prompt -> {
+                    boolean hasToolResp =
+                            prompt.getInstructions().stream()
+                                    .anyMatch(ToolResponseMessage.class::isInstance);
+                    if (!hasToolResp) {
+                        return new ChatResponse(
+                                List.of(
+                                        new Generation(
+                                                AssistantMessage.builder()
+                                                        .content("Need to drop staging_db")
+                                                        .toolCalls(
+                                                                List.of(
+                                                                        new AssistantMessage
+                                                                                .ToolCall(
+                                                                                "call_persist_1",
+                                                                                "function",
+                                                                                "delete_production_db",
+                                                                                "{\"dbName\":\"staging_db\"}")))
+                                                        .build())));
+                    }
+                    return new ChatResponse(
+                            List.of(
+                                    new Generation(
+                                            new AssistantMessage(
+                                                    "Database staging_db dropped after restart."))));
+                };
+
+        AgentRunResult suspended = executorProcess1.run(checkpointModel, "Drop staging_db");
+        assertThat(suspended.isAwaitingApproval()).isTrue();
+        String checkpointId = suspended.checkpoint().checkpointId();
+        assertThat(store1.size()).isEqualTo(1);
+
+        // 2. 模拟进程重启（创建全新的 FileAgentCheckpointStore 与 ReActAgentExecutor），从磁盘恢复并完成 resume
+        dev.ppmb.intellihub.agent.checkpoint.FileAgentCheckpointStore store2 =
+                new dev.ppmb.intellihub.agent.checkpoint.FileAgentCheckpointStore(cpFile);
+        assertThat(store2.size()).isEqualTo(1);
+        ReActAgentExecutor executorProcess2 =
+                new ReActAgentExecutor(
+                        registry,
+                        new dev.ppmb.intellihub.prompt.render.SafePromptRenderer(),
+                        AgentExecutionBudget.defaults(),
+                        store2);
+
+        AgentRunResult resumed =
+                executorProcess2.resume(
+                        checkpointModel,
+                        checkpointId,
+                        true,
+                        "Approved after server restart",
+                        Map.of(),
+                        AgentExecutionBudget.defaults());
+        assertThat(resumed.stopReason()).isEqualTo(AgentStopReason.COMPLETED);
+        assertThat(resumed.output()).isEqualTo("Database staging_db dropped after restart.");
+        assertThat(store2.size()).isZero();
+
+        // 3. 验证 SessionMemoryStore 跨重启持久化与滑动窗口裁剪
+        dev.ppmb.intellihub.agent.memory.FileSessionMemoryStore memStore1 =
+                new dev.ppmb.intellihub.agent.memory.FileSessionMemoryStore(memFile, 3);
+        memStore1.appendMessages(
+                "sess-001",
+                List.of(
+                        new org.springframework.ai.chat.messages.UserMessage("Msg 1"),
+                        new AssistantMessage("Reply 1"),
+                        new org.springframework.ai.chat.messages.UserMessage("Msg 2"),
+                        new AssistantMessage("Reply 2")));
+
+        dev.ppmb.intellihub.agent.memory.FileSessionMemoryStore memStore2 =
+                new dev.ppmb.intellihub.agent.memory.FileSessionMemoryStore(memFile, 3);
+        List<Message> restoredMsgs = memStore2.getMessages("sess-001");
+        assertThat(restoredMsgs).hasSize(3);
+        assertThat(restoredMsgs.get(0).getText()).isEqualTo("Reply 1");
+        assertThat(restoredMsgs.get(2).getText()).isEqualTo("Reply 2");
+    }
 }

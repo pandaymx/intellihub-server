@@ -1,15 +1,26 @@
 package dev.ppmb.intellihub.autoconfigure;
 
+import dev.ppmb.intellihub.agent.checkpoint.AgentCheckpointStore;
+import dev.ppmb.intellihub.agent.checkpoint.FileAgentCheckpointStore;
+import dev.ppmb.intellihub.agent.checkpoint.InMemoryAgentCheckpointStore;
+import dev.ppmb.intellihub.agent.checkpoint.JdbcAgentCheckpointStore;
 import dev.ppmb.intellihub.agent.engine.AgentExecutionBudget;
 import dev.ppmb.intellihub.agent.engine.ReActAgentExecutor;
+import dev.ppmb.intellihub.agent.memory.FileSessionMemoryStore;
+import dev.ppmb.intellihub.agent.memory.InMemorySessionMemoryStore;
+import dev.ppmb.intellihub.agent.memory.JdbcSessionMemoryStore;
+import dev.ppmb.intellihub.agent.memory.SessionMemoryStore;
 import dev.ppmb.intellihub.agent.tool.GovernedToolRegistry;
 import dev.ppmb.intellihub.agent.tool.KnowledgeBaseSearchTool;
 import dev.ppmb.intellihub.agent.tool.ToolApprovalHandler;
 import dev.ppmb.intellihub.prompt.render.SafePromptRenderer;
 import dev.ppmb.intellihub.rag.engine.RagQueryEngine;
+import java.nio.file.Path;
 import java.util.List;
+import javax.sql.DataSource;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -66,11 +77,47 @@ public class IntelliHubAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public AgentCheckpointStore intelliHubAgentCheckpointStore(
+            ObjectProvider<DataSource> dataSourceProvider,
+            @Value("${intellihub.agent.jdbc-store-enabled:false}") boolean jdbcEnabled,
+            @Value("${intellihub.agent.checkpoint-path:}") String checkpointPath) {
+        DataSource dataSource = dataSourceProvider.getIfAvailable();
+        if (jdbcEnabled && dataSource != null) {
+            return new JdbcAgentCheckpointStore(dataSource);
+        }
+        if (checkpointPath != null && !checkpointPath.isBlank()) {
+            return new FileAgentCheckpointStore(Path.of(checkpointPath.strip()));
+        }
+        return new InMemoryAgentCheckpointStore();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public SessionMemoryStore intelliHubSessionMemoryStore(
+            ObjectProvider<DataSource> dataSourceProvider,
+            @Value("${intellihub.agent.jdbc-store-enabled:false}") boolean jdbcEnabled,
+            @Value("${intellihub.agent.session-memory-path:}") String sessionMemoryPath) {
+        DataSource dataSource = dataSourceProvider.getIfAvailable();
+        if (jdbcEnabled && dataSource != null) {
+            return new JdbcSessionMemoryStore(dataSource);
+        }
+        if (sessionMemoryPath != null && !sessionMemoryPath.isBlank()) {
+            return new FileSessionMemoryStore(Path.of(sessionMemoryPath.strip()));
+        }
+        return new InMemorySessionMemoryStore();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public ReActAgentExecutor intelliHubReActAgentExecutor(
             GovernedToolRegistry toolRegistry,
-            ObjectProvider<SafePromptRenderer> promptRendererProvider) {
+            ObjectProvider<SafePromptRenderer> promptRendererProvider,
+            ObjectProvider<AgentCheckpointStore> checkpointStoreProvider) {
         SafePromptRenderer renderer =
                 promptRendererProvider.getIfAvailable(SafePromptRenderer::new);
-        return new ReActAgentExecutor(toolRegistry, renderer, AgentExecutionBudget.defaults());
+        AgentCheckpointStore checkpointStore =
+                checkpointStoreProvider.getIfAvailable(InMemoryAgentCheckpointStore::new);
+        return new ReActAgentExecutor(
+                toolRegistry, renderer, AgentExecutionBudget.defaults(), checkpointStore);
     }
 }

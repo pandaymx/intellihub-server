@@ -412,5 +412,9 @@ class RagModuleTest {
         List<ScoredDocument> listed = store2.listAll(10, Map.of("tenant_id", "default"));
         assertThat(listed).hasSize(1);
         assertThat(listed.get(0).document().getId()).isEqualTo("persisted-chunk-1");
+        assertThat(
+                        dev.ppmb.intellihub.rag.store.pg.PgHybridSearchBackend.toVectorLiteral(
+                                new float[] {0.25f, -0.5f, 1.0f}))
+                .isEqualTo("[0.25,-0.5,1.0]");
     }
 }

@@ -54,6 +54,8 @@ import reactor.core.publisher.Flux;
         properties = {
             "intellihub.llm.embedding.enabled=false",
             "intellihub.rag.storage-path=",
+            "intellihub.agent.checkpoint-path=",
+            "intellihub.agent.session-memory-path=",
             "intellihub.chat.sessions-path="
         })
 class IntellihubServerApplicationTests {
