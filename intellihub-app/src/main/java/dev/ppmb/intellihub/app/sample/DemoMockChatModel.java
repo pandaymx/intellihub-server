@@ -8,6 +8,7 @@ import java.util.Locale;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -15,6 +16,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.content.Media;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import reactor.core.publisher.Flux;
 
@@ -287,6 +289,38 @@ public class DemoMockChatModel implements ChatModel {
         }
 
         // 普通对话无需调用外部工具，直接自然回复
+        List<Media> attachedMedia = extractLastUserMedia(messages);
+        if (!attachedMedia.isEmpty()) {
+            StringBuilder mediaSummary = new StringBuilder();
+            for (Media m : attachedMedia) {
+                int byteLen = 0;
+                try {
+                    byte[] b = m.getDataAsByteArray();
+                    byteLen = b != null ? b.length : 0;
+                } catch (Exception ignored) {
+                    // ignore
+                }
+                mediaSummary
+                        .append("- **`")
+                        .append(m.getName() != null ? m.getName() : "media")
+                        .append("`** (`")
+                        .append(m.getMimeType())
+                        .append("`, ")
+                        .append(byteLen)
+                        .append(" bytes)\n");
+            }
+            String visionReply =
+                    "<think>检测到 Spring AI UserMessage 中包含 "
+                            + attachedMedia.size()
+                            + " 个原生多模态 Media 对象，正在执行视觉特征解析...</think>"
+                            + "已通过 **Spring AI `Media` 原生多模态通道** 接收到您上传的视觉附件：\n\n"
+                            + mediaSummary
+                            + "\n针对您的指令 **「"
+                            + (goal.isBlank() ? "视觉解析" : goal.strip())
+                            + "」**，在切换至 **`Gemini 3.5` (`gemini-3.5-flash-lite`)** 或 **`Gemini 3.8` (`gemini-3.8-flash`)** 在线通道时，上述图像/PDF 字节流会直接封装为 Gemini `Part.fromBytes` 原生视觉 Token 进行架构图解析、报错截图诊断与多模态问答。";
+            return buildTextResponse(visionReply, 120, 140);
+        }
+
         String cleanUserQuestion = goal.isBlank() ? "你好" : goal.strip();
         String directReply =
                 "<think>分析用户消息：「"
@@ -310,6 +344,20 @@ public class DemoMockChatModel implements ChatModel {
             return rawUserText.substring(idx + marker.length()).strip();
         }
         return rawUserText.strip();
+    }
+
+    private static List<Media> extractLastUserMedia(List<Message> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return List.of();
+        }
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if (messages.get(i) instanceof UserMessage um
+                    && um.getMedia() != null
+                    && !um.getMedia().isEmpty()) {
+                return um.getMedia();
+            }
+        }
+        return List.of();
     }
 
     private static String extractLastUserText(List<Message> messages) {

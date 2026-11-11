@@ -48,6 +48,7 @@ public class MultiFormatDocumentParserRegistry {
 
     public static List<DocumentParser> defaultParsers() {
         return List.of(
+                new ImageDocumentParser(),
                 new PdfDocumentParser(),
                 new OoxmlDocumentParser(),
                 new TabularDocumentParser(),

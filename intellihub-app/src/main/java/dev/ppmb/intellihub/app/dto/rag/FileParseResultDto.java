@@ -17,11 +17,22 @@ public class FileParseResultDto {
     private int chunkCount;
     private List<String> chunkIds;
     private Map<String, Object> metadata;
+    private String mimeType;
+    private String base64Data;
 
     public FileParseResultDto() {}
 
     public static FileParseResultDto fromParsed(
             ParsedDocument parsed, int chunkCount, List<String> chunkIds) {
+        return fromParsed(parsed, chunkCount, chunkIds, null, null);
+    }
+
+    public static FileParseResultDto fromParsed(
+            ParsedDocument parsed,
+            int chunkCount,
+            List<String> chunkIds,
+            String mimeType,
+            String base64Data) {
         FileParseResultDto dto = new FileParseResultDto();
         dto.setFileName(parsed.fileName());
         dto.setFileFormat(parsed.fileFormat());
@@ -31,6 +42,8 @@ public class FileParseResultDto {
         dto.setChunkCount(chunkCount);
         dto.setChunkIds(chunkIds != null ? chunkIds : List.of());
         dto.setMetadata(parsed.metadata());
+        dto.setMimeType(mimeType);
+        dto.setBase64Data(base64Data);
         return dto;
     }
 
@@ -96,5 +109,21 @@ public class FileParseResultDto {
 
     public void setMetadata(Map<String, Object> metadata) {
         this.metadata = metadata;
+    }
+
+    public String getMimeType() {
+        return mimeType;
+    }
+
+    public void setMimeType(String mimeType) {
+        this.mimeType = mimeType;
+    }
+
+    public String getBase64Data() {
+        return base64Data;
+    }
+
+    public void setBase64Data(String base64Data) {
+        this.base64Data = base64Data;
     }
 }

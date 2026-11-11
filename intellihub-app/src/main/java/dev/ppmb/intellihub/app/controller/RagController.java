@@ -117,7 +117,12 @@ public class RagController {
                     mf.getOriginalFilename() != null ? mf.getOriginalFilename() : mf.getName();
             ParsedDocument parsed =
                     ingestionPipeline.parseFile(fileName, mf.getContentType(), bytes);
-            results.add(FileParseResultDto.fromParsed(parsed, 0, List.of()));
+            String mimeType = resolveMultimodalMimeType(parsed, mf.getContentType());
+            String base64 =
+                    (mimeType != null && bytes.length <= 20 * 1024 * 1024)
+                            ? java.util.Base64.getEncoder().encodeToString(bytes)
+                            : null;
+            results.add(FileParseResultDto.fromParsed(parsed, 0, List.of(), mimeType, base64));
         }
         return ApiResponse.success(results);
     }
@@ -160,18 +165,61 @@ public class RagController {
 
             DocumentIngestionPipeline.FileIngestionResult ingestResult =
                     ingestionPipeline.ingestFile(
-                            fileName, mf.getContentType(), bytes, fileMeta, knowledgeStore::addAll);
+                            fileName,
+                            mf.getContentType(),
+                            bytes,
+                            fileMeta,
+                            chunks -> {
+                                if (!ingestResultIsPureImage(fileName, mf.getContentType())) {
+                                    knowledgeStore.addAll(chunks);
+                                }
+                            });
 
-            List<String> chunkIds = ingestResult.chunks().stream().map(Document::getId).toList();
+            ParsedDocument parsed = ingestResult.parsedDocument();
+            boolean isImage = parsed.fileFormat().startsWith("IMAGE:");
+            List<String> chunkIds =
+                    isImage
+                            ? List.of()
+                            : ingestResult.chunks().stream().map(Document::getId).toList();
             allChunkIds.addAll(chunkIds);
+            String mimeType = resolveMultimodalMimeType(parsed, mf.getContentType());
+            String base64 =
+                    (mimeType != null && bytes.length <= 20 * 1024 * 1024)
+                            ? java.util.Base64.getEncoder().encodeToString(bytes)
+                            : null;
             fileResults.add(
                     FileParseResultDto.fromParsed(
-                            ingestResult.parsedDocument(), chunkIds.size(), chunkIds));
+                            parsed, chunkIds.size(), chunkIds, mimeType, base64));
         }
 
         return ApiResponse.success(
                 new BatchFileIngestResponse(
                         fileResults.size(), allChunkIds.size(), allChunkIds, fileResults));
+    }
+
+    private static boolean ingestResultIsPureImage(String fileName, String contentType) {
+        if (contentType != null && contentType.toLowerCase().startsWith("image/")) {
+            return true;
+        }
+        String ext =
+                dev.ppmb.intellihub.rag.parser.CharsetEncodingSupport.extractExtension(fileName);
+        return List.of("png", "jpg", "jpeg", "webp", "gif", "bmp").contains(ext);
+    }
+
+    private static String resolveMultimodalMimeType(ParsedDocument parsed, String rawContentType) {
+        if (parsed.metadata() != null && parsed.metadata().get("mime_type") instanceof String m) {
+            return m;
+        }
+        if ("PDF".equalsIgnoreCase(parsed.fileFormat())) {
+            return "application/pdf";
+        }
+        if (rawContentType != null) {
+            String lower = rawContentType.toLowerCase();
+            if (lower.startsWith("image/") || lower.startsWith("application/pdf")) {
+                return lower.split(";")[0].strip();
+            }
+        }
+        return null;
     }
 
     private static List<MultipartFile> collectMultipartFiles(

@@ -132,5 +132,14 @@ public class UnifiedChatTurnRequest {
 
     public record HistoryMessage(String role, String content) {}
 
-    public record AttachedDocumentContext(String fileName, String fileFormat, String content) {}
+    /**
+     * 对话附件对象：同时支持结构化文本内容（{@code content}）与 Gemini 原生多模态视觉字节流（{@code mimeType} + {@code
+     * base64Data}，如 {@code image/png}、{@code image/jpeg}、{@code application/pdf}）。
+     */
+    public record AttachedDocumentContext(
+            String fileName,
+            String fileFormat,
+            String content,
+            String mimeType,
+            String base64Data) {}
 }

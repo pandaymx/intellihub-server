@@ -7,6 +7,7 @@ import dev.ppmb.intellihub.agent.engine.AgentStepTrace;
 import dev.ppmb.intellihub.core.exception.GlobalErrorCodeConstants;
 import dev.ppmb.intellihub.core.exception.IntelliHubExceptionUtil;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +17,8 @@ import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.content.Media;
+import org.springframework.util.MimeTypeUtils;
 
 /**
  * {@link AgentCheckpoint} 与 Spring AI 多态 {@link Message} 列表的无损 JSON 序列化器。
@@ -141,7 +144,7 @@ public final class AgentCheckpointSerializer {
                                     .map(AgentCheckpointSerializer::toToolCallDto)
                                     .toList()
                             : List.of();
-            return new SerializedMessage(type, text, metadata, tcs, List.of());
+            return new SerializedMessage(type, text, metadata, tcs, List.of(), List.of());
         }
         if (msg instanceof ToolResponseMessage trm) {
             List<SerializedToolResponse> resps =
@@ -152,9 +155,32 @@ public final class AgentCheckpointSerializer {
                                                     r.id(), r.name(), r.responseData()))
                                     .toList()
                             : List.of();
-            return new SerializedMessage(type, text, metadata, List.of(), resps);
+            return new SerializedMessage(type, text, metadata, List.of(), resps, List.of());
         }
-        return new SerializedMessage(type, text, metadata, List.of(), List.of());
+        if (msg instanceof UserMessage um && um.getMedia() != null && !um.getMedia().isEmpty()) {
+            List<SerializedMedia> mediaList = new ArrayList<>();
+            for (Media m : um.getMedia()) {
+                if (m == null) {
+                    continue;
+                }
+                try {
+                    byte[] bytes = m.getDataAsByteArray();
+                    if (bytes != null && bytes.length > 0) {
+                        mediaList.add(
+                                new SerializedMedia(
+                                        m.getName(),
+                                        m.getMimeType() != null
+                                                ? m.getMimeType().toString()
+                                                : "application/octet-stream",
+                                        Base64.getEncoder().encodeToString(bytes)));
+                    }
+                } catch (Exception ignored) {
+                    // ignore non-byte media
+                }
+            }
+            return new SerializedMessage(type, text, metadata, List.of(), List.of(), mediaList);
+        }
+        return new SerializedMessage(type, text, metadata, List.of(), List.of(), List.of());
     }
 
     public static Message fromMessageDto(SerializedMessage dto) {
@@ -190,6 +216,32 @@ public final class AgentCheckpointSerializer {
                 }
             }
             return ToolResponseMessage.builder().responses(responses).build();
+        }
+        if (dto.media() != null && !dto.media().isEmpty()) {
+            List<Media> mediaObjs = new ArrayList<>();
+            for (SerializedMedia sm : dto.media()) {
+                if (sm == null || sm.base64Data() == null || sm.base64Data().isBlank()) {
+                    continue;
+                }
+                try {
+                    byte[] bytes = Base64.getDecoder().decode(sm.base64Data());
+                    String mime =
+                            sm.mimeType() != null && !sm.mimeType().isBlank()
+                                    ? sm.mimeType()
+                                    : "image/png";
+                    mediaObjs.add(
+                            Media.builder()
+                                    .mimeType(MimeTypeUtils.parseMimeType(mime))
+                                    .data(bytes)
+                                    .name(sm.name() != null ? sm.name() : "media")
+                                    .build());
+                } catch (Exception ignored) {
+                    // ignore invalid base64
+                }
+            }
+            if (!mediaObjs.isEmpty()) {
+                return UserMessage.builder().text(text).media(mediaObjs).build();
+            }
         }
         return new UserMessage(text);
     }
@@ -230,7 +282,10 @@ public final class AgentCheckpointSerializer {
             String text,
             Map<String, Object> metadata,
             List<SerializedToolCall> toolCalls,
-            List<SerializedToolResponse> toolResponses) {}
+            List<SerializedToolResponse> toolResponses,
+            List<SerializedMedia> media) {}
+
+    public record SerializedMedia(String name, String mimeType, String base64Data) {}
 
     public record SerializedToolCall(String id, String type, String name, String arguments) {}
 

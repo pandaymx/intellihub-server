@@ -473,4 +473,92 @@ class IntellihubServerApplicationTests {
                 .andExpect(jsonPath("$.data.awaitingApproval").value(false))
                 .andExpect(jsonPath("$.data.output").value("订单 ORD-2026 的 199.00 元退款已审批通过并执行完毕。"));
     }
+
+    @Test
+    void shouldPassSpringAiMediaObjectsForPastedScreenshotsAndPdfInUnifiedChatTurn()
+            throws Exception {
+        // 1. 生成一张 32x16 内存 PNG 截图并验证 /api/v1/rag/documents/parse 多模态解析
+        java.awt.image.BufferedImage img =
+                new java.awt.image.BufferedImage(32, 16, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.io.ByteArrayOutputStream pngBos = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(img, "png", pngBos);
+        byte[] pngBytes = pngBos.toByteArray();
+
+        org.springframework.mock.web.MockMultipartFile mockPngFile =
+                new org.springframework.mock.web.MockMultipartFile(
+                        "files", "arch-diagram.png", "image/png", pngBytes);
+
+        MvcResult parseRes =
+                mockMvc.perform(
+                                org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                                        .multipart("/api/v1/rag/documents/parse")
+                                        .file(mockPngFile))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.code").value(0))
+                        .andExpect(jsonPath("$.data[0].fileFormat").value("IMAGE:PNG"))
+                        .andExpect(jsonPath("$.data[0].mimeType").value("image/png"))
+                        .andExpect(jsonPath("$.data[0].base64Data").isNotEmpty())
+                        .andReturn();
+
+        String base64Png =
+                MAPPER.readTree(parseRes.getResponse().getContentAsString())
+                        .path("data")
+                        .get(0)
+                        .path("base64Data")
+                        .asText();
+
+        // 2. 调用 /api/v1/chat/turn（使用内置 demo-mock 验证 UserMessage.getMedia() 接收到原生 Media 对象）
+        String turnReq =
+                MAPPER.writeValueAsString(
+                        Map.of(
+                                "message",
+                                "请帮我诊断这张报错截图和架构 PDF",
+                                "channel",
+                                "demo-mock",
+                                "enableAgent",
+                                true,
+                                "enableRag",
+                                false,
+                                "attachments",
+                                List.of(
+                                        Map.of(
+                                                "fileName", "arch-diagram.png",
+                                                "fileFormat", "IMAGE:PNG",
+                                                "content", "# arch-diagram",
+                                                "mimeType", "image/png",
+                                                "base64Data", base64Png),
+                                        Map.of(
+                                                "fileName",
+                                                "spec.pdf",
+                                                "fileFormat",
+                                                "PDF",
+                                                "content",
+                                                "# Spec",
+                                                "mimeType",
+                                                "application/pdf",
+                                                "base64Data",
+                                                java.util.Base64.getEncoder()
+                                                        .encodeToString(
+                                                                "%PDF-1.4 mock"
+                                                                        .getBytes(
+                                                                                java.nio.charset
+                                                                                        .StandardCharsets
+                                                                                        .UTF_8))))));
+
+        mockMvc.perform(
+                        post("/api/v1/chat/turn")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(turnReq))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(
+                        jsonPath("$.data.content")
+                                .value(
+                                        org.hamcrest.Matchers.allOf(
+                                                org.hamcrest.Matchers.containsString(
+                                                        "arch-diagram.png"),
+                                                org.hamcrest.Matchers.containsString("image/png"),
+                                                org.hamcrest.Matchers.containsString(
+                                                        "application/pdf"))));
+    }
 }

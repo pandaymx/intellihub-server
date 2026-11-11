@@ -25,6 +25,7 @@ import dev.ppmb.intellihub.rag.ingest.DocumentIngestionPipeline;
 import dev.ppmb.intellihub.rag.retrieval.RagSearchRequest;
 import dev.ppmb.intellihub.rag.retrieval.ScoredDocument;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -38,9 +39,11 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.content.Media;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.util.MimeTypeUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -97,18 +100,28 @@ public class ChatController {
     @PostMapping("/turn")
     public ApiResponse<UnifiedChatTurnResponse> unifiedChatTurn(
             @RequestBody UnifiedChatTurnRequest request) {
-        if (request == null || request.getMessage() == null || request.getMessage().isBlank()) {
+        boolean hasAttachments =
+                request != null
+                        && request.getAttachments() != null
+                        && !request.getAttachments().isEmpty();
+        if (request == null
+                || ((request.getMessage() == null || request.getMessage().isBlank())
+                        && !hasAttachments)) {
             throw IntelliHubExceptionUtil.exception(
                     GlobalErrorCodeConstants.AI_PROMPT_EMPTY, "对话消息内容不能为空");
         }
 
-        String userMsg = request.getMessage().strip();
+        String userMsg =
+                (request.getMessage() != null && !request.getMessage().isBlank())
+                        ? request.getMessage().strip()
+                        : "请详细分析并解读我上传的图片或文档内容。";
         // 1. 提示词防注入安全护栏实时校验（越狱攻击直接返回 1001000006）
         safePromptRenderer.getInjectionGuard().validate("message", userMsg);
 
         long startTime = System.currentTimeMillis();
         String targetName = resolveTargetChannel(request.getChannel());
         ChatModel chatModel = modelRegistry.getChatModel(targetName);
+        List<Media> multimodalMediaList = buildSpringAiMediaList(request.getAttachments());
 
         UnifiedChatTurnResponse response = new UnifiedChatTurnResponse();
         response.setChannel(targetName);
@@ -148,10 +161,16 @@ public class ChatController {
                 extractPromptText.append("\n\n").append(attachmentsBlock);
             }
 
+            UserMessage.Builder extractMsgBuilder =
+                    UserMessage.builder().text(extractPromptText.toString());
+            if (!multimodalMediaList.isEmpty()) {
+                extractMsgBuilder.media(multimodalMediaList);
+            }
+
             Map<String, Object> extracted =
                     structuredOutputExecutor.execute(
                             chatModel,
-                            new Prompt(new UserMessage(extractPromptText.toString())),
+                            new Prompt(extractMsgBuilder.build()),
                             new ParameterizedTypeReference<Map<String, Object>>() {});
 
             response.setStructuredData(extracted);
@@ -189,7 +208,11 @@ public class ChatController {
 
         String enrichedUserPrompt =
                 buildEnrichedUserMessage(userMsg, ragCitations, request.getAttachments());
-        messages.add(new UserMessage(enrichedUserPrompt));
+        UserMessage.Builder userMessageBuilder = UserMessage.builder().text(enrichedUserPrompt);
+        if (!multimodalMediaList.isEmpty()) {
+            userMessageBuilder.media(multimodalMediaList);
+        }
+        messages.add(userMessageBuilder.build());
 
         // 5. 默认使用 ReAct 智能体引擎执行（自动按需调用工具或直接回答，并支持高风险工具挂起审批）
         boolean useAgent =
@@ -311,10 +334,19 @@ public class ChatController {
             return "";
         }
         StringBuilder sb = new StringBuilder();
-        sb.append("【当前对话上传的附件解析内容】\n");
         for (UnifiedChatTurnRequest.AttachedDocumentContext att : attachments) {
-            if (att == null || att.content() == null || att.content().isBlank()) {
+            if (att == null) {
                 continue;
+            }
+            // 纯图片已通过 Spring AI Media 注入视觉通道，无需拼接冗余占位文本
+            if (att.fileFormat() != null && att.fileFormat().startsWith("IMAGE:")) {
+                continue;
+            }
+            if (att.content() == null || att.content().isBlank()) {
+                continue;
+            }
+            if (sb.isEmpty()) {
+                sb.append("【当前对话上传的附件解析内容】\n");
             }
             String name = att.fileName() != null ? att.fileName() : "unnamed";
             String fmt = att.fileFormat() != null ? att.fileFormat() : "TEXT";
@@ -331,6 +363,67 @@ public class ChatController {
                     .append("\n</attached_document>\n\n");
         }
         return sb.toString().strip();
+    }
+
+    /**
+     * 将前端上传或粘贴的图片（PNG/JPEG/WebP/GIF）与 PDF 字节流转换为 Spring AI 原生 {@link Media} 对象列表，直接传入 {@code
+     * gemini-3.5-flash-lite} / {@code gemini-3.8-flash} 进行多模态视觉推理。
+     */
+    public static List<Media> buildSpringAiMediaList(
+            List<UnifiedChatTurnRequest.AttachedDocumentContext> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return List.of();
+        }
+        List<Media> mediaList = new ArrayList<>();
+        for (UnifiedChatTurnRequest.AttachedDocumentContext att : attachments) {
+            if (att == null || att.base64Data() == null || att.base64Data().isBlank()) {
+                continue;
+            }
+            String rawBase64 = att.base64Data().strip();
+            String detectedMime = att.mimeType();
+            if (rawBase64.startsWith("data:")) {
+                int commaIdx = rawBase64.indexOf(',');
+                if (commaIdx > 0) {
+                    String header = rawBase64.substring(5, commaIdx);
+                    int semiIdx = header.indexOf(';');
+                    if ((detectedMime == null || detectedMime.isBlank()) && semiIdx > 0) {
+                        detectedMime = header.substring(0, semiIdx).strip();
+                    }
+                    rawBase64 = rawBase64.substring(commaIdx + 1).strip();
+                }
+            }
+            if (detectedMime == null || detectedMime.isBlank()) {
+                if (att.fileFormat() != null && "PDF".equalsIgnoreCase(att.fileFormat().strip())) {
+                    detectedMime = "application/pdf";
+                } else {
+                    detectedMime = "image/png";
+                }
+            }
+            String lowerMime = detectedMime.toLowerCase();
+            if (!lowerMime.startsWith("image/")
+                    && !lowerMime.equals("application/pdf")
+                    && !lowerMime.startsWith("audio/")
+                    && !lowerMime.startsWith("video/")) {
+                continue;
+            }
+            try {
+                byte[] decoded = Base64.getDecoder().decode(rawBase64);
+                if (decoded.length > 0) {
+                    mediaList.add(
+                            Media.builder()
+                                    .mimeType(MimeTypeUtils.parseMimeType(lowerMime))
+                                    .data(decoded)
+                                    .name(att.fileName() != null ? att.fileName() : "media")
+                                    .build());
+                }
+            } catch (Exception e) {
+                log.warn(
+                        "[ChatController] 忽略无法解码的多模态 Base64 附件 [{}]: {}",
+                        att.fileName(),
+                        e.getMessage());
+            }
+        }
+        return mediaList;
     }
 
     /**

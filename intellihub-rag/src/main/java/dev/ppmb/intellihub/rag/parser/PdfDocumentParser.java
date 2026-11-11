@@ -90,14 +90,15 @@ public class PdfDocumentParser implements DocumentParser {
                 md.append(pageText).append("\n\n");
             }
             metadata.put("extracted_pages", nonEmptyPages);
+            metadata.put("mime_type", "application/pdf");
 
-            String finalMd = md.toString().strip();
             if (nonEmptyPages == 0) {
-                throw IntelliHubExceptionUtil.exception(
-                        GlobalErrorCodeConstants.AI_DOCUMENT_PARSE_ERROR,
-                        "PDF 未包含可提取的文本层（可能是纯扫描图片 PDF）: {}",
-                        fileName);
+                metadata.put("scanned_pdf", true);
+                md.append("> [多模态视觉 PDF：共 ")
+                        .append(totalPages)
+                        .append(" 页图像扫描层，支持通过 Gemini 原生多模态 Media 直接进行视觉解析]\n");
             }
+            String finalMd = md.toString().strip();
             return new ParsedDocument(
                     fileName, "PDF", docTitle, finalMd, finalMd.length(), metadata);
         } catch (IOException e) {
